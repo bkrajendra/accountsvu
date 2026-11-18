@@ -675,6 +675,280 @@ export interface ItcReviewInput {
   eligible?: string;
 }
 
+// ---------------------------------------------------------------------------
+// Banking (Phase 1.5)
+// ---------------------------------------------------------------------------
+
+export type MoneyAccountKind = "cash" | "bank";
+export type VoucherType = "receipt" | "payment";
+export type VoucherMode = "cash" | "upi" | "neft" | "rtgs" | "imps" | "cheque" | "card" | "other";
+export type StatementLineStatus = "unmatched" | "matched" | "ignored";
+
+export interface MoneyAccount {
+  id: string;
+  organisationId: string;
+  accountId: string;
+  kind: MoneyAccountKind;
+  name: string;
+  bankName: string | null;
+  accountNumber: string | null;
+  ifsc: string | null;
+  statementMapping: string | null;
+  isActive: boolean;
+  rowVersion: number;
+  createdAt: string;
+  updatedAt: string;
+  ledgerCode: string;
+  systemRole: string | null;
+  balancePaise: number;
+  openingBalancePaise: number;
+  unmatchedLines: number;
+  lastStatementDate: string | null;
+  statementBalancePaise: number | null;
+}
+
+export interface MoneyAccountInput {
+  kind: MoneyAccountKind;
+  name: string;
+  bankName?: string;
+  accountNumber?: string;
+  ifsc?: string;
+  openingBalance?: string;
+  openingBalanceSide?: "debit" | "credit";
+  isActive?: boolean;
+}
+
+export interface OpeningBalance {
+  accountId: string;
+  code: string;
+  name: string;
+  kind: string;
+  systemRole: string | null;
+  amountPaise: number;
+}
+
+export interface OpeningBalanceInput {
+  accountId: string;
+  amount?: string;
+  side?: "debit" | "credit";
+}
+
+export interface OpenDocument {
+  documentKind: "sales" | "purchase";
+  id: string;
+  docType: string;
+  number: string | null;
+  docDate: string;
+  dueDate: string | null;
+  totalPaise: number;
+  paidPaise: number;
+  adjustedPaise: number;
+  outstandingPaise: number;
+}
+
+export interface AllocationInput {
+  documentId: string;
+  amount: string;
+}
+
+export interface VoucherInput {
+  voucherType: VoucherType;
+  voucherDate: string;
+  moneyAccountId: string;
+  partyId?: string;
+  counterAccountId?: string;
+  amount: string;
+  mode?: VoucherMode;
+  reference?: string;
+  narration?: string;
+  allocations: AllocationInput[];
+  statementLineId?: string;
+}
+
+export interface VoucherSummary {
+  id: string;
+  voucherType: VoucherType;
+  status: "posted" | "cancelled";
+  number: string;
+  voucherDate: string;
+  moneyAccountId: string;
+  moneyAccountName: string;
+  partyId: string | null;
+  counterparty: string;
+  amountPaise: number;
+  mode: VoucherMode;
+  reference: string | null;
+}
+
+export interface AllocationView {
+  documentKind: "sales" | "purchase";
+  documentId: string;
+  number: string | null;
+  docDate: string | null;
+  amountPaise: number;
+}
+
+export interface VoucherView {
+  id: string;
+  organisationId: string;
+  voucherType: VoucherType;
+  status: "posted" | "cancelled";
+  number: string;
+  financialYear: string;
+  seq: number;
+  voucherDate: string;
+  moneyAccountId: string;
+  partyId: string | null;
+  counterAccountId: string | null;
+  amountPaise: number;
+  mode: VoucherMode;
+  reference: string | null;
+  narration: string | null;
+  journalEntryId: string;
+  cancelEntryId: string | null;
+  cancelReason: string | null;
+  rowVersion: number;
+  createdAt: string;
+  updatedAt: string;
+  cancelledAt: string | null;
+  moneyAccountName: string;
+  moneyAccountKind: MoneyAccountKind;
+  partyName: string | null;
+  counterAccountName: string | null;
+  allocations: AllocationView[];
+  allocatedPaise: number;
+  onAccountPaise: number;
+  statementLineId: string | null;
+}
+
+export interface Settlement {
+  voucherId: string;
+  voucherType: VoucherType;
+  number: string;
+  voucherDate: string;
+  amountPaise: number;
+}
+
+export interface BookLine {
+  entryId: string;
+  entryDate: string;
+  sourceType: string;
+  sourceId: string | null;
+  narration: string | null;
+  debitPaise: number;
+  creditPaise: number;
+  partyName: string | null;
+  postedAt: string;
+  statementLineId: string | null;
+  balancePaise: number;
+}
+
+export interface MoneyBook {
+  account: MoneyAccount;
+  from: string | null;
+  to: string | null;
+  openingPaise: number;
+  debitTotalPaise: number;
+  creditTotalPaise: number;
+  closingPaise: number;
+  lines: BookLine[];
+}
+
+export interface StatementMapping {
+  headerRow: number;
+  date: number | null;
+  description: number | null;
+  reference: number | null;
+  withdrawal: number | null;
+  deposit: number | null;
+  amount: number | null;
+  drCr: number | null;
+  balance: number | null;
+  dateOrder: "dmy" | "mdy" | "ymd";
+}
+
+export interface StatementFile {
+  fileName: string;
+  rows: string[][];
+  mapping: StatementMapping;
+  mappingSaved: boolean;
+}
+
+export interface StatementImportInput {
+  moneyAccountId: string;
+  fileName: string;
+  rows: string[][];
+  mapping: StatementMapping;
+}
+
+export interface ParsedStatementLine {
+  row: number;
+  lineDate: string;
+  description: string;
+  reference: string | null;
+  withdrawalPaise: number;
+  depositPaise: number;
+  balancePaise: number | null;
+  duplicate: boolean;
+}
+
+export interface StatementPreview {
+  lines: ParsedStatementLine[];
+  skipped: { row: number; reason: string }[];
+  newLines: number;
+  duplicates: number;
+  depositsPaise: number;
+  withdrawalsPaise: number;
+  firstDate: string | null;
+  lastDate: string | null;
+}
+
+export interface StatementImportResult {
+  batch: string;
+  imported: number;
+  duplicates: number;
+  skipped: number;
+}
+
+export interface MatchCandidate {
+  entryId: string;
+  entryDate: string;
+  sourceType: string;
+  sourceId: string | null;
+  narration: string | null;
+  partyName: string | null;
+  amountPaise: number;
+  dayGap: number;
+}
+
+export interface StatementLine {
+  id: string;
+  organisationId: string;
+  moneyAccountId: string;
+  lineDate: string;
+  description: string;
+  reference: string | null;
+  withdrawalPaise: number;
+  depositPaise: number;
+  balancePaise: number | null;
+  fingerprint: string;
+  importBatch: string;
+  sourceFile: string | null;
+  status: StatementLineStatus;
+  journalEntryId: string | null;
+  matchedAt: string | null;
+  matchedBy: string | null;
+  createdAt: string;
+  matched: MatchCandidate | null;
+  suggestions: MatchCandidate[];
+}
+
+export interface Reconciliation {
+  account: MoneyAccount;
+  lines: StatementLine[];
+  unmatchedEntries: MatchCandidate[];
+}
+
 /** Error shape produced by src-tauri/src/commands.rs. */
 export class ApiError extends Error {
   readonly code: string;
@@ -775,6 +1049,36 @@ export const api = {
     call<Attachment>("add_attachment", { documentId, fileName, bytes: Array.from(bytes) }),
   attachmentContent: (id: string) => call<AttachmentContent>("attachment_content", { id }),
   removeAttachment: (id: string) => call<null>("remove_attachment", { id }),
+
+  listMoneyAccounts: () => call<MoneyAccount[]>("list_money_accounts"),
+  createMoneyAccount: (input: MoneyAccountInput) => call<MoneyAccount>("create_money_account", { input }),
+  updateMoneyAccount: (id: string, input: MoneyAccountInput, expectedVersion: number) =>
+    call<MoneyAccount>("update_money_account", { id, input, expectedVersion }),
+  listOpeningBalances: () => call<OpeningBalance[]>("list_opening_balances"),
+  setOpeningBalance: (input: OpeningBalanceInput) => call<OpeningBalance>("set_opening_balance", { input }),
+  voucherAccounts: () => call<Account[]>("voucher_accounts"),
+  openDocuments: (partyId: string, voucherType: VoucherType) =>
+    call<OpenDocument[]>("open_documents", { partyId, voucherType }),
+  listVouchers: () => call<VoucherSummary[]>("list_vouchers"),
+  getVoucher: (id: string) => call<VoucherView>("get_voucher", { id }),
+  documentSettlements: (documentKind: "sales" | "purchase", documentId: string) =>
+    call<Settlement[]>("document_settlements", { documentKind, documentId }),
+  createVoucher: (input: VoucherInput) => call<VoucherView>("create_voucher", { input }),
+  cancelVoucher: (id: string, reason: string, expectedVersion: number) =>
+    call<VoucherView>("cancel_voucher", { id, reason, expectedVersion }),
+  moneyBook: (moneyAccountId: string, from?: string, to?: string) =>
+    call<MoneyBook>("money_book", { moneyAccountId, from: from || null, to: to || null }),
+  /** Bytes cross IPC as a number array; the core caps files at 5 MB. */
+  readStatementFile: (moneyAccountId: string, fileName: string, bytes: Uint8Array) =>
+    call<StatementFile>("read_statement_file", { moneyAccountId, fileName, bytes: Array.from(bytes) }),
+  previewStatement: (input: StatementImportInput) => call<StatementPreview>("preview_statement", { input }),
+  importStatement: (input: StatementImportInput) => call<StatementImportResult>("import_statement", { input }),
+  reconciliation: (moneyAccountId: string) => call<Reconciliation>("reconciliation", { moneyAccountId }),
+  matchStatementLine: (lineId: string, entryId: string) => call<null>("match_statement_line", { lineId, entryId }),
+  unmatchStatementLine: (lineId: string) => call<null>("unmatch_statement_line", { lineId }),
+  ignoreStatementLine: (lineId: string) => call<null>("ignore_statement_line", { lineId }),
+  undoStatementImport: (moneyAccountId: string, batch: string) =>
+    call<number>("undo_statement_import", { moneyAccountId, batch }),
 };
 
 /** Query keys shared by readers and the mutations that invalidate them. */
@@ -793,4 +1097,13 @@ export const keys = {
   purchases: ["purchases"] as const,
   purchase: (id: string) => ["purchases", id] as const,
   purchaseAccounts: ["purchaseAccounts"] as const,
+  moneyAccounts: ["moneyAccounts"] as const,
+  openingBalances: ["openingBalances"] as const,
+  voucherAccounts: ["voucherAccounts"] as const,
+  vouchers: ["vouchers"] as const,
+  voucher: (id: string) => ["vouchers", id] as const,
+  openDocuments: (partyId: string, type: string) => ["openDocuments", partyId, type] as const,
+  settlements: (kind: string, id: string) => ["settlements", kind, id] as const,
+  moneyBook: (id: string, from: string, to: string) => ["moneyBook", id, from, to] as const,
+  reconciliation: (id: string) => ["reconciliation", id] as const,
 };

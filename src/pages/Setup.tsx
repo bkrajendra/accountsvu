@@ -2,13 +2,14 @@ import { useRef, useState, type ReactNode } from "react";
 import { useNavigate, Navigate } from "react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
-import { ArrowLeft, ArrowRight, BadgeCheck, Building2, Check, CircleSlash, FileText, Loader2, ShieldCheck } from "lucide-react";
+import { ArrowLeft, ArrowRight, BadgeCheck, Building2, Check, CircleSlash, FileText, Loader2 } from "lucide-react";
 import { api, ApiError, keys, type SetupBusinessInput } from "../lib/api";
 import { CONSTITUTIONS, MONTHS, STATES, constitutionFromPan, gstinError, gstinParts, isValidPan, stateName } from "../lib/gst";
 import { Button, Card } from "../components/ui";
 import { ChoiceCards, Field, FormGrid, Select, TextInput, Toggle } from "../components/form";
 import { useToast } from "../components/Toast";
 import { ThemeSwitcher } from "../components/ThemeSwitcher";
+import { BrandMark, Wordmark } from "../components/Brand";
 
 const STEPS = ["GST registration", "Business details", "Books & numbering", "Review"] as const;
 
@@ -204,10 +205,8 @@ export function Setup() {
       <div className="mx-auto flex min-h-full w-full max-w-[680px] flex-col px-6 pb-10 pt-8">
         <header className="mb-7 flex items-center justify-between">
           <div className="flex items-center gap-2.5">
-            <div className="grid size-8 place-items-center rounded-[9px] bg-gradient-to-b from-[#2b8cff] to-[#0062d1] text-white">
-              <ShieldCheck size={17} strokeWidth={2.2} />
-            </div>
-            <span className="text-[15px] font-semibold tracking-[-0.015em]">AccountsVU</span>
+            <BrandMark size={32} />
+            <Wordmark className="text-[17px]" />
           </div>
           <ThemeSwitcher />
         </header>

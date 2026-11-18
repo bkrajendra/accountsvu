@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { api, keys, type Account } from "../../lib/api";
 import { Badge, Card } from "../../components/ui";
 import { SettingsSection } from "./SettingsSection";
+import { OpeningBalances } from "./OpeningBalances";
 
 const KINDS: { kind: Account["kind"]; label: string }[] = [
   { kind: "asset", label: "Assets" },
@@ -43,6 +44,7 @@ export function AccountsTab() {
               </div>
             );
           })}
+          <OpeningBalances />
         </div>
       )}
     </SettingsSection>

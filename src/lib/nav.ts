@@ -52,7 +52,6 @@ export const primaryNav: NavItem[] = [
     label: "Banking",
     icon: Landmark,
     summary: "Receipts, payments, cash and bank books, and bank statement reconciliation.",
-    phase: "Phase 1.5",
   },
   {
     path: "/reports",

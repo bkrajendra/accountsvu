@@ -11,6 +11,7 @@ import { useSave } from "../../lib/mutations";
 import { Badge, Button, Card } from "../../components/ui";
 import { Dialog } from "../../components/Dialog";
 import { Field, TextInput } from "../../components/form";
+import { SettlementsCard } from "../banking/Settlements";
 
 export function SalesDocument() {
   const { id = "" } = useParams();
@@ -56,7 +57,7 @@ export function SalesDocument() {
               </Link>
             </>
           )}
-          {doc.status === "issued" && (
+          {doc.status === "issued" && doc.paidPaise === 0 && (
             <Button onClick={() => setCancelling(true)}>
               <Ban size={15} /> Cancel
             </Button>
@@ -166,6 +167,9 @@ export function SalesDocument() {
               <p className="mt-2 text-[12px] text-subtle">The number stays used and a reversing entry was posted.</p>
             </Card>
           )}
+          {!credit && doc.status === "issued" && (
+            <SettlementsCard kind="sales" documentId={doc.id} partyId={doc.partyId} totalPaise={doc.totalPaise} paidPaise={doc.paidPaise} adjustedPaise={doc.creditedPaise} open />
+          )}
           {!credit && doc.status !== "draft" && (
             <Card className="p-4 text-[13px]">
               <div className="mb-2 text-[12px] font-semibold uppercase tracking-[0.04em] text-muted">Credit notes</div>
@@ -188,7 +192,7 @@ export function SalesDocument() {
             </Card>
           )}
           <Card className="p-4 text-[12.5px] text-muted">
-            PDF and printing arrive with the invoice layout in Phase 1.7. Receipts against this invoice arrive in Phase 1.5.
+            PDF and printing arrive with the invoice layout in Phase 1.7.
           </Card>
         </div>
       </div>

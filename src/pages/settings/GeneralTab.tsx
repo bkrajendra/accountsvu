@@ -94,7 +94,7 @@ function ThemePreview({ variant }: { variant: ThemePreference }) {
   const mini = (dark: boolean) => (
     <div className={clsx("flex h-full", dark ? "bg-[#161618]" : "bg-[#f5f5f7]")}>
       <div className={clsx("w-[28%] space-y-1.5 p-2", dark ? "bg-[#1e1e21]" : "bg-[#ececef]")}>
-        <div className="h-1.5 w-3/4 rounded-full bg-[#0071e3]" />
+        <div className="h-1.5 w-3/4 rounded-full bg-brand" />
         <div className={clsx("h-1.5 w-2/3 rounded-full", dark ? "bg-white/20" : "bg-black/15")} />
         <div className={clsx("h-1.5 w-1/2 rounded-full", dark ? "bg-white/20" : "bg-black/15")} />
       </div>

@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { BadgeCheck, Building2, FileDigit, History, ListTree, Package, Paperclip, Receipt, ShoppingBag, Upload, Users, type LucideIcon } from "lucide-react";
+import { ArrowLeftRight, BadgeCheck, Building2, Landmark, Scale, FileDigit, History, ListTree, Package, Paperclip, Receipt, ShoppingBag, Upload, Users, type LucideIcon } from "lucide-react";
 import { api, keys, type AuditEvent } from "../../lib/api";
 import { Card } from "../../components/ui";
 import { documentTypeLabel } from "../../lib/gst";
@@ -17,9 +17,14 @@ const ENTITY: Record<string, { label: string; icon: LucideIcon }> = {
   purchase_document: { label: "Purchase", icon: ShoppingBag },
   purchase_line: { label: "Input tax credit", icon: ShoppingBag },
   attachment: { label: "Attachment", icon: Paperclip },
+  money_account: { label: "Cash or bank account", icon: Landmark },
+  money_voucher: { label: "Receipt or payment", icon: ArrowLeftRight },
+  bank_statement: { label: "Bank statement", icon: Upload },
+  bank_statement_line: { label: "Statement line", icon: Landmark },
+  account: { label: "Ledger account", icon: Scale },
 };
 
-const VERB: Record<string, string> = { create: "created", update: "updated", seed: "created", run: "completed", issue: "issued", cancel: "cancelled", delete: "deleted", record: "recorded", itc_review: "reviewed" };
+const VERB: Record<string, string> = { create: "created", update: "updated", seed: "created", run: "completed", issue: "issued", cancel: "cancelled", delete: "deleted", record: "recorded", itc_review: "reviewed", receipt: "recorded", payment: "recorded", match: "matched", unmatch: "unmatched", ignore: "ignored", import: "imported", undo_import: "import undone", opening_balance: "opening balance set" };
 
 /** Field names that changed between the before/after snapshots. */
 function changedFields(e: AuditEvent): string[] {
@@ -50,6 +55,10 @@ function subject(e: AuditEvent): string | null {
     if (e.entityType === "purchase_document") return `${a.number ?? a.supplierInvoiceNumber ?? "Expense"} · ${a.partyName ?? "no supplier"}`;
     if (e.entityType === "purchase_line") return `${a.description} · ${a.itcStatus}`;
     if (e.entityType === "attachment") return `${a.fileName}`;
+    if (e.entityType === "money_account") return String(a.name);
+    if (e.entityType === "money_voucher") return String(a.number);
+    if (e.entityType === "bank_statement") return a.file ? `${a.file} · ${a.imported} lines added` : `${a.removed} lines removed`;
+    if (e.entityType === "bank_statement_line") return String(a.description);
     if (e.entityType === "import") return `${a.fileName} · ${a.created} ${a.kind} added${a.skipped ? `, ${a.skipped} skipped` : ""}`;
   } catch {
     /* older or partial snapshot */

@@ -17,6 +17,26 @@ import type {
   ItemInput,
   Organisation,
   Attachment,
+  BookLine,
+  MatchCandidate,
+  MoneyAccount,
+  MoneyAccountInput,
+  MoneyAccountKind,
+  MoneyBook,
+  OpenDocument,
+  OpeningBalanceInput,
+  ParsedStatementLine,
+  Reconciliation,
+  StatementFile,
+  StatementImportInput,
+  StatementImportResult,
+  StatementLine,
+  StatementLineStatus,
+  StatementMapping,
+  StatementPreview,
+  VoucherInput,
+  VoucherType,
+  VoucherView,
   ItcStatus,
   LineCalc,
   Party,
@@ -164,7 +184,7 @@ const SEED: [string, string, Account["kind"], string | null][] = [
   ["3000", "Owner's capital", "equity", "capital"], ["4000", "Sales", "income", "sales"],
   ["5000", "Purchases", "expense", "purchases"], ["6900", "Round-off", "expense", "round_off"],
   ["1400", "Fixed assets", "asset", "fixed_assets"], ["5100", "Freight inward", "expense", null],
-  ["6000", "Rent", "expense", null], ["6040", "Office expenses", "expense", null],
+  ["6000", "Rent", "expense", null], ["6040", "Office expenses", "expense", null], ["6060", "Bank charges", "expense", "bank_charges"], ["3100", "Drawings", "equity", "drawings"],
 ];
 
 function preview(series: Series): Series {
@@ -507,6 +527,9 @@ function checkSales(input: SalesDocumentInput): [string, string][] {
 
 function display(d: SalesDocument): SalesDisplayStatus {
   if (d.status !== "issued") return d.status;
+  const credited = salesDocs.filter((c) => c.originalDocumentId === d.id && c.status === "issued").reduce((a, c) => a + c.totalPaise, 0);
+  if (d.docType !== "credit_note" && d.paidPaise + credited >= d.totalPaise) return d.paidPaise > 0 ? "paid" : "issued";
+  if (d.docType !== "credit_note" && d.paidPaise > 0) return "part_paid";
   if (d.docType !== "credit_note" && d.dueDate && d.dueDate < new Date().toISOString().slice(0, 10)) return "overdue";
   return "issued";
 }
@@ -668,7 +691,9 @@ function purchaseStatus(d: PurchaseDocument): PurchaseStatus {
   if (d.status === "draft") return "draft";
   if (d.status === "cancelled") return "cancelled";
   if (d.docType === "debit_note") return "recorded";
-  if (d.paidPaise >= d.totalPaise) return "paid";
+  const debited = purchaseDocs.filter((n) => n.originalDocumentId === d.id && n.status === "recorded").reduce((a, n) => a + n.totalPaise, 0);
+  if (d.paidPaise + debited >= d.totalPaise) return d.paidPaise > 0 ? "paid" : "recorded";
+  if (d.paidPaise > 0) return "part_paid";
   if (d.dueDate && d.dueDate < new Date().toISOString().slice(0, 10)) return "overdue";
   return "unpaid";
 }
@@ -817,14 +842,509 @@ async function purchaseCommand(command: string, args: Record<string, any>): Prom
   }
 }
 
+
+// ---------------------------------------------------------------------------
+// Banking (Phase 1.5) — a simplified stand-in: balances come from opening
+// balances, receipts/payments and cash/bank purchases only.
+// ---------------------------------------------------------------------------
+
+type MoneyRec = Omit<MoneyAccount, "ledgerCode" | "systemRole" | "balancePaise" | "openingBalancePaise" | "unmatchedLines" | "lastStatementDate" | "statementBalancePaise">;
+type VoucherRec = Omit<VoucherView, "moneyAccountName" | "moneyAccountKind" | "partyName" | "counterAccountName" | "allocations" | "allocatedPaise" | "onAccountPaise" | "statementLineId"> & { allocations: { documentKind: "sales" | "purchase"; documentId: string; amountPaise: number }[] };
+type LineRec = Omit<StatementLine, "matched" | "suggestions">;
+
+let moneyAccounts: MoneyRec[] = [];
+let vouchers: VoucherRec[] = [];
+let statementLines: LineRec[] = [];
+const openings = new Map<string, number>();
+const today = () => {
+  const d = new Date(); // local calendar date, as the Rust core uses
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+};
+const nf = (message: string): never => {
+  throw { code: "not_found", message, fields: [] } satisfies Fail;
+};
+const conflict = (message: string): never => {
+  throw { code: "conflict", message, fields: [] } satisfies Fail;
+};
+
+function ensureMoneyAccounts() {
+  if (moneyAccounts.length || !org) return;
+  for (const a of accounts.filter((a) => a.systemRole === "cash" || a.systemRole === "bank")) {
+    moneyAccounts.push({
+      id: id(), organisationId: org.id, accountId: a.id, kind: a.systemRole as MoneyAccountKind, name: a.name,
+      bankName: null, accountNumber: null, ifsc: null, statementMapping: null, isActive: true, rowVersion: 1, createdAt: now(), updatedAt: now(),
+    });
+  }
+}
+
+/** Every posting that touches a ledger account, as book lines (oldest first). */
+function ledgerLines(accountId: string): Omit<BookLine, "balancePaise">[] {
+  const out: Omit<BookLine, "balancePaise">[] = [];
+  const opening = openings.get(accountId) ?? 0;
+  if (opening)
+    out.push({ entryId: `open-${accountId}`, entryDate: org!.booksStartDate, sourceType: "account_opening_balance", sourceId: accountId, narration: "Opening balance", debitPaise: Math.max(opening, 0), creditPaise: Math.max(-opening, 0), partyName: null, postedAt: "", statementLineId: null });
+  const money = moneyAccounts.find((m) => m.accountId === accountId);
+  for (const v of vouchers) {
+    const entries: [string, string, number][] = [[v.journalEntryId, v.voucherDate, 1]];
+    if (v.cancelEntryId) entries.push([v.cancelEntryId, v.voucherDate, -1]);
+    for (const [entryId, date, sign] of entries) {
+      let amt = 0;
+      const inflow = v.voucherType === "receipt" ? v.amountPaise : -v.amountPaise;
+      if (money && v.moneyAccountId === money.id) amt = inflow;
+      else if (v.counterAccountId === accountId) amt = -inflow;
+      if (!amt) continue;
+      amt *= sign;
+      out.push({ entryId, entryDate: date, sourceType: v.voucherType, sourceId: v.id, narration: sign < 0 ? `Cancellation of ${v.number}` : `${v.number}`, debitPaise: Math.max(amt, 0), creditPaise: Math.max(-amt, 0), partyName: parties.find((p) => p.id === v.partyId)?.name ?? null, postedAt: v.createdAt, statementLineId: null });
+    }
+  }
+  if (money?.kind && money.accountId === accounts.find((a) => a.systemRole === money.kind)?.id)
+    for (const d of purchaseDocs.filter((d) => d.status !== "draft" && d.paymentMode === money.kind))
+      out.push({ entryId: `pur-${d.id}`, entryDate: d.docDate, sourceType: "purchase", sourceId: d.id, narration: d.supplierInvoiceNumber ?? "Purchase", debitPaise: 0, creditPaise: d.totalPaise, partyName: d.partyName, postedAt: d.createdAt, statementLineId: null });
+  out.sort((a, b) => (a.entryDate + a.postedAt).localeCompare(b.entryDate + b.postedAt));
+  for (const l of out) l.statementLineId = statementLines.find((s) => s.journalEntryId === l.entryId)?.id ?? null;
+  return out;
+}
+
+function moneyView(m: MoneyRec): MoneyAccount {
+  const lines = ledgerLines(m.accountId);
+  const mine = statementLines.filter((l) => l.moneyAccountId === m.id).sort((a, b) => b.lineDate.localeCompare(a.lineDate));
+  const ledger = accounts.find((a) => a.id === m.accountId);
+  return {
+    ...m,
+    ledgerCode: ledger?.code ?? "",
+    systemRole: ledger?.systemRole ?? null,
+    balancePaise: lines.reduce((a, l) => a + l.debitPaise - l.creditPaise, 0),
+    openingBalancePaise: openings.get(m.accountId) ?? 0,
+    unmatchedLines: mine.filter((l) => l.status === "unmatched").length,
+    lastStatementDate: mine[0]?.lineDate ?? null,
+    statementBalancePaise: mine.find((l) => l.balancePaise != null)?.balancePaise ?? null,
+  };
+}
+
+function checkMoney(input: MoneyAccountInput, exceptId?: string): [string, string][] {
+  const e: [string, string][] = [];
+  if (!input.name.trim()) e.push(["name", "Give the account a name."]);
+  else if (moneyAccounts.some((m) => m.id !== exceptId && m.name.toLowerCase() === input.name.trim().toLowerCase())) e.push(["name", "Another cash or bank account has this name."]);
+  if (input.ifsc && !/^[A-Za-z]{4}0[A-Za-z0-9]{6}$/.test(input.ifsc.trim())) e.push(["ifsc", "An IFSC looks like HDFC0001234."]);
+  if (input.openingBalance && toPaise(input.openingBalance) == null) e.push(["openingBalance", "Enter an amount like 1250 or 1250.50."]);
+  return e;
+}
+
+function openDocs(partyId: string, type: VoucherType): OpenDocument[] {
+  if (type === "receipt")
+    return salesDocs
+      .filter((d) => d.partyId === partyId && d.status === "issued" && d.docType !== "credit_note")
+      .map((d) => {
+        const adjusted = salesDocs.filter((c) => c.originalDocumentId === d.id && c.status === "issued").reduce((a, c) => a + c.totalPaise, 0);
+        return { documentKind: "sales" as const, id: d.id, docType: d.docType, number: d.number, docDate: d.docDate, dueDate: d.dueDate, totalPaise: d.totalPaise, paidPaise: d.paidPaise, adjustedPaise: adjusted, outstandingPaise: d.totalPaise - d.paidPaise - adjusted };
+      })
+      .filter((d) => d.outstandingPaise > 0)
+      .sort((a, b) => a.docDate.localeCompare(b.docDate));
+  return purchaseDocs
+    .filter((d) => d.partyId === partyId && d.status === "recorded" && d.docType !== "debit_note" && d.paymentMode === "credit")
+    .map((d) => {
+      const adjusted = purchaseDocs.filter((n) => n.originalDocumentId === d.id && n.status === "recorded").reduce((a, n) => a + n.totalPaise, 0);
+      return { documentKind: "purchase" as const, id: d.id, docType: d.docType, number: d.supplierInvoiceNumber ?? d.number, docDate: d.supplierInvoiceDate ?? d.docDate, dueDate: d.dueDate, totalPaise: d.totalPaise, paidPaise: d.paidPaise, adjustedPaise: adjusted, outstandingPaise: d.totalPaise - d.paidPaise - adjusted };
+    })
+    .filter((d) => d.outstandingPaise > 0)
+    .sort((a, b) => a.docDate.localeCompare(b.docDate));
+}
+
+function adjustPaid(kind: "sales" | "purchase", docId: string, delta: number) {
+  if (kind === "sales") salesDocs = salesDocs.map((d) => (d.id === docId ? { ...d, paidPaise: d.paidPaise + delta, rowVersion: d.rowVersion + 1 } : d));
+  else purchaseDocs = purchaseDocs.map((d) => (d.id === docId ? { ...d, paidPaise: d.paidPaise + delta, rowVersion: d.rowVersion + 1 } : d));
+}
+
+function voucherView(vid: string): VoucherView {
+  const v = vouchers.find((x) => x.id === vid) ?? nf("Receipt or payment not found");
+  const m = moneyAccounts.find((x) => x.id === v.moneyAccountId)!;
+  const allocations = v.allocations.map((a) => {
+    const s = salesDocs.find((d) => d.id === a.documentId);
+    const p = purchaseDocs.find((d) => d.id === a.documentId);
+    return { ...a, number: s?.number ?? p?.supplierInvoiceNumber ?? p?.number ?? null, docDate: s?.docDate ?? p?.docDate ?? null };
+  });
+  const allocated = allocations.reduce((a, x) => a + x.amountPaise, 0);
+  return {
+    ...v,
+    moneyAccountName: m.name,
+    moneyAccountKind: m.kind,
+    partyName: parties.find((p) => p.id === v.partyId)?.name ?? null,
+    counterAccountName: accounts.find((a) => a.id === v.counterAccountId)?.name ?? null,
+    allocations,
+    allocatedPaise: allocated,
+    onAccountPaise: v.partyId ? v.amountPaise - allocated : 0,
+    statementLineId: statementLines.find((l) => l.journalEntryId === v.journalEntryId)?.id ?? null,
+  };
+}
+
+function createVoucher(input: VoucherInput): VoucherView {
+  const e: [string, string][] = [];
+  if (!input.voucherDate) e.push(["voucherDate", "Enter a valid date."]);
+  else if (input.voucherDate > today()) e.push(["voucherDate", "The date can't be in the future."]);
+  const m = moneyAccounts.find((x) => x.id === input.moneyAccountId);
+  if (!m) e.push(["moneyAccountId", "Choose a cash or bank account."]);
+  const amount = toPaise(input.amount);
+  if (!amount || amount <= 0) e.push(["amount", "Enter an amount."]);
+  if (input.partyId && input.counterAccountId) e.push(["partyId", "Choose a party or an account, not both."]);
+  if (!input.partyId && !input.counterAccountId) e.push(["partyId", "Choose who the money is from or to."]);
+  const open = input.partyId ? openDocs(input.partyId, input.voucherType) : [];
+  const allocs: VoucherRec["allocations"] = [];
+  input.allocations.forEach((a, i) => {
+    const amt = toPaise(a.amount) ?? 0;
+    if (!amt) return;
+    const d = open.find((x) => x.id === a.documentId);
+    if (!d) e.push([`allocations.${i}.amount`, "This document is already settled or isn't this party's."]);
+    else if (amt > d.outstandingPaise) e.push([`allocations.${i}.amount`, "More than is outstanding on this document."]);
+    else allocs.push({ documentKind: d.documentKind, documentId: d.id, amountPaise: amt });
+  });
+  if (amount && allocs.reduce((a, x) => a + x.amountPaise, 0) > amount) e.push(["allocations", "The amounts settled add up to more than the total."]);
+  const line = input.statementLineId ? statementLines.find((l) => l.id === input.statementLineId) : undefined;
+  if (line && amount) {
+    const signed = line.depositPaise - line.withdrawalPaise;
+    if ((input.voucherType === "receipt" ? amount : -amount) !== signed) e.push(["amount", "The amount and direction must match the statement line."]);
+  }
+  if (e.length) fail(e);
+  const type = input.voucherType;
+  const fyCode = shortFy();
+  const seq = vouchers.filter((v) => v.voucherType === type && v.financialYear === fyCode).length + 1;
+  const v: VoucherRec = {
+    id: id(), organisationId: org!.id, voucherType: type, status: "posted",
+    number: `${type === "receipt" ? "RCT" : "PMT"}/${fyCode}/${String(seq).padStart(4, "0")}`,
+    financialYear: fyCode, seq, voucherDate: input.voucherDate, moneyAccountId: m!.id,
+    partyId: input.partyId || null, counterAccountId: input.counterAccountId || null, amountPaise: amount!,
+    mode: m!.kind === "cash" ? "cash" : (input.mode ?? "neft"), reference: blank(input.reference), narration: blank(input.narration),
+    journalEntryId: id(), cancelEntryId: null, cancelReason: null, rowVersion: 1, createdAt: now(), updatedAt: now(), cancelledAt: null,
+    allocations: allocs,
+  };
+  vouchers.push(v);
+  for (const a of allocs) adjustPaid(a.documentKind, a.documentId, a.amountPaise);
+  if (line) statementLines = statementLines.map((l) => (l.id === line.id ? { ...l, status: "matched", journalEntryId: v.journalEntryId, matchedAt: now(), matchedBy: "owner" } : l));
+  log(`money_voucher.${type}`, v.id, v);
+  return voucherView(v.id);
+}
+
+// -- Statements ---------------------------------------------------------------
+
+function parseDate(raw: string, order: StatementMapping["dateOrder"]): string | null {
+  const s = raw.trim();
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+  const parts = s.split(/\s+/)[0].split(/[/.-]/);
+  if (parts.length !== 3) return null;
+  const [d, m, y] = order === "mdy" ? [parts[1], parts[0], parts[2]] : order === "ymd" ? [parts[2], parts[1], parts[0]] : parts;
+  const months = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+  const mm = /^\d+$/.test(m) ? Number(m) : months.indexOf(m.slice(0, 3).toLowerCase()) + 1;
+  const yy = y.length === 2 ? 2000 + Number(y) : Number(y);
+  const dd = Number(d);
+  if (!(mm >= 1 && mm <= 12 && dd >= 1 && dd <= 31 && yy > 1900)) return null;
+  return `${yy}-${String(mm).padStart(2, "0")}-${String(dd).padStart(2, "0")}`;
+}
+
+function parseAmount(raw: string): number | null {
+  let s = raw.replace(/[,₹\s]/g, "");
+  if (!s || s === "-") return null;
+  let sign = 1;
+  if (/dr$/i.test(s)) { sign = -1; s = s.slice(0, -2); } else if (/cr$/i.test(s)) s = s.slice(0, -2);
+  if (s.startsWith("(") && s.endsWith(")")) { sign = -sign; s = s.slice(1, -1); }
+  if (s.startsWith("-")) { sign = -sign; s = s.slice(1); }
+  const p = toPaise(s);
+  return p && !Number.isNaN(p) ? sign * p : null;
+}
+
+function suggestMapping(rows: string[][]): StatementMapping {
+  let best: StatementMapping = { headerRow: 0, date: null, description: null, reference: null, withdrawal: null, deposit: null, amount: null, drCr: null, balance: null, dateOrder: "dmy" };
+  let bestScore = 0;
+  rows.slice(0, 40).forEach((row, i) => {
+    const m: StatementMapping = { headerRow: i, date: null, description: null, reference: null, withdrawal: null, deposit: null, amount: null, drCr: null, balance: null, dateOrder: "dmy" };
+    let score = 0;
+    row.forEach((h, c) => {
+      const n = norm(h);
+      if (!n) return;
+      const has = (...k: string[]) => k.some((x) => n.includes(x));
+      if (m.date == null && has("date") && !has("value", "posted")) { m.date = c; score += 2; }
+      else if (m.description == null && has("description", "narration", "particular", "remark", "details")) { m.description = c; score += 2; }
+      else if (m.withdrawal == null && has("withdrawal", "debit")) { m.withdrawal = c; score += 2; }
+      else if (m.deposit == null && has("deposit", "credit")) { m.deposit = c; score += 2; }
+      else if (m.drCr == null && ["crdr", "drcr", "type"].includes(n)) { m.drCr = c; score += 1; }
+      else if (m.balance == null && has("balance")) { m.balance = c; score += 1; }
+      else if (m.amount == null && has("amount")) { m.amount = c; score += 2; }
+      else if (m.reference == null && has("chq", "cheque", "ref", "utr", "transactionid")) { m.reference = c; score += 1; }
+    });
+    if (m.date == null) { const d = row.findIndex((h) => norm(h).includes("date")); if (d >= 0) { m.date = d; score += 1; } }
+    if (m.date != null && (m.amount != null || m.withdrawal != null || m.deposit != null) && score > bestScore) { best = m; bestScore = score; }
+  });
+  if (best.amount == null) best.drCr = null;
+  return best;
+}
+
+function parseStatement(rows: string[][], m: StatementMapping): StatementPreview {
+  if (m.date == null) fail([["mapping", "Choose the date column."]]);
+  if (m.description == null) fail([["mapping", "Choose the description column."]]);
+  if (m.amount == null && m.withdrawal == null && m.deposit == null) fail([["mapping", "Choose the withdrawal and deposit columns, or a single amount column."]]);
+  const lines: ParsedStatementLine[] = [];
+  const skipped: StatementPreview["skipped"] = [];
+  const cell = (r: string[], c: number | null) => (c == null ? "" : (r[c] ?? "").trim());
+  rows.forEach((r, i) => {
+    if (i <= m.headerRow || r.every((c) => !c.trim())) return;
+    const date = parseDate(cell(r, m.date), m.dateOrder);
+    if (!date) return void skipped.push({ row: i + 1, reason: "no date" });
+    let signed: number | null;
+    if (m.amount != null) {
+      const a = parseAmount(cell(r, m.amount));
+      if (a != null && m.drCr != null) {
+        const t = cell(r, m.drCr).toLowerCase();
+        signed = t.startsWith("d") ? -Math.abs(a) : t.startsWith("c") ? Math.abs(a) : null;
+      } else signed = a;
+    } else {
+      const w = parseAmount(cell(r, m.withdrawal));
+      const d = parseAmount(cell(r, m.deposit));
+      signed = w != null && d == null ? -Math.abs(w) : d != null && w == null ? Math.abs(d) : null;
+    }
+    if (signed == null) return void skipped.push({ row: i + 1, reason: "no amount" });
+    const ref = cell(r, m.reference);
+    lines.push({
+      row: i + 1, lineDate: date, description: cell(r, m.description) || "(no description)", reference: ref && ref !== "-" ? ref : null,
+      withdrawalPaise: signed < 0 ? -signed : 0, depositPaise: Math.max(signed, 0),
+      balancePaise: m.balance == null ? null : parseAmount(cell(r, m.balance)), duplicate: false,
+    });
+  });
+  return { lines, skipped, newLines: 0, duplicates: 0, depositsPaise: 0, withdrawalsPaise: 0, firstDate: null, lastDate: null };
+}
+
+const fingerprint = (moneyId: string, l: ParsedStatementLine, n: number) =>
+  [moneyId, l.lineDate, l.depositPaise - l.withdrawalPaise, l.description.toLowerCase().replace(/[^a-z0-9]/g, ""), l.reference ?? "", l.balancePaise ?? "", n].join("|");
+
+function withFingerprints(moneyId: string, lines: ParsedStatementLine[]) {
+  const seen = new Map<string, number>();
+  return lines.map((l) => {
+    const base = fingerprint(moneyId, l, 0);
+    const n = (seen.get(base) ?? 0) + 1;
+    seen.set(base, n);
+    return { line: l, fp: fingerprint(moneyId, l, n) };
+  });
+}
+
+function candidate(b: Omit<BookLine, "balancePaise">, lineDate?: string): MatchCandidate {
+  const gap = lineDate ? Math.round((Date.parse(b.entryDate) - Date.parse(lineDate)) / 86_400_000) : 0;
+  return { entryId: b.entryId, entryDate: b.entryDate, sourceType: b.sourceType, sourceId: b.sourceId, narration: b.narration, partyName: b.partyName, amountPaise: b.debitPaise - b.creditPaise, dayGap: gap };
+}
+
+function reconciliationView(moneyId: string): Reconciliation {
+  const m = moneyAccounts.find((x) => x.id === moneyId) ?? nf("Account not found");
+  const book = ledgerLines(m.accountId);
+  const free = book.filter((b) => !b.statementLineId && b.debitPaise - b.creditPaise !== 0 && !b.sourceType.endsWith("opening_balance"));
+  const lines = statementLines
+    .filter((l) => l.moneyAccountId === moneyId)
+    .sort((a, b) => b.lineDate.localeCompare(a.lineDate))
+    .map((l) => {
+      const signed = l.depositPaise - l.withdrawalPaise;
+      const matchedEntry = book.find((b) => b.entryId === l.journalEntryId);
+      return {
+        ...l,
+        matched: matchedEntry ? candidate(matchedEntry, l.lineDate) : null,
+        suggestions: l.status === "unmatched"
+          ? free.filter((b) => b.debitPaise - b.creditPaise === signed).map((b) => candidate(b, l.lineDate)).filter((c) => Math.abs(c.dayGap) <= 7).sort((a, b) => Math.abs(a.dayGap) - Math.abs(b.dayGap)).slice(0, 5)
+          : [],
+      };
+    });
+  return { account: moneyView(m), lines, unmatchedEntries: free.reverse().map((b) => candidate(b)) };
+}
+
+function lineState(lineId: string, status: StatementLineStatus, entryId: string | null = null) {
+  const l = statementLines.find((x) => x.id === lineId) ?? nf("Statement line not found");
+  if (status !== "unmatched" && l.status !== "unmatched") conflict("This line is already reconciled or ignored.");
+  statementLines = statementLines.map((x) => (x.id === lineId ? { ...x, status, journalEntryId: entryId, matchedAt: status === "unmatched" ? null : now(), matchedBy: status === "unmatched" ? null : "owner" } : x));
+  log(`bank_statement_line.${status === "matched" ? "match" : status === "ignored" ? "ignore" : "unmatch"}`, lineId);
+  return null;
+}
+
+function bankingCommand(command: string, args: Record<string, any>): unknown {
+  ensureMoneyAccounts();
+  switch (command) {
+    case "list_money_accounts":
+      return moneyAccounts.map(moneyView);
+    case "create_money_account": {
+      const input = args.input as MoneyAccountInput;
+      const e = checkMoney(input);
+      if (e.length) fail(e);
+      const used = new Set(accounts.map((a) => a.code));
+      let code = input.kind === "cash" ? 1001 : 1011;
+      while (used.has(String(code))) code++;
+      const ledger: Account = { id: id(), code: String(code), name: input.name.trim(), kind: "asset", systemRole: null, isActive: true };
+      accounts.push(ledger);
+      const m: MoneyRec = {
+        id: id(), organisationId: org!.id, accountId: ledger.id, kind: input.kind, name: input.name.trim(),
+        bankName: input.kind === "bank" ? blank(input.bankName) : null, accountNumber: input.kind === "bank" ? (blank(input.accountNumber)?.replace(/\s/g, "") ?? null) : null,
+        ifsc: input.kind === "bank" ? (blank(input.ifsc)?.toUpperCase() ?? null) : null, statementMapping: null, isActive: true, rowVersion: 1, createdAt: now(), updatedAt: now(),
+      };
+      moneyAccounts.push(m);
+      const ob = (toPaise(input.openingBalance) ?? 0) * (input.openingBalanceSide === "credit" ? -1 : 1);
+      if (ob) openings.set(ledger.id, ob);
+      log("money_account.create", m.id, m);
+      return moneyView(m);
+    }
+    case "update_money_account": {
+      const input = args.input as MoneyAccountInput;
+      const cur = moneyAccounts.find((m) => m.id === args.id) ?? nf("Account not found");
+      if (cur.rowVersion !== args.expectedVersion) conflict("This record was changed elsewhere. Reload it and try again.");
+      const e = checkMoney(input, cur.id);
+      const active = input.isActive ?? cur.isActive;
+      if (!active && cur.isActive && moneyView(cur).balancePaise !== 0) e.push(["isActive", "Bring the balance to zero (transfer it) before closing this account."]);
+      if (e.length) fail(e);
+      const next: MoneyRec = {
+        ...cur, name: input.name.trim(), bankName: cur.kind === "bank" ? blank(input.bankName) : null,
+        accountNumber: cur.kind === "bank" ? (blank(input.accountNumber)?.replace(/\s/g, "") ?? null) : null,
+        ifsc: cur.kind === "bank" ? (blank(input.ifsc)?.toUpperCase() ?? null) : null, isActive: active, rowVersion: cur.rowVersion + 1, updatedAt: now(),
+      };
+      moneyAccounts = moneyAccounts.map((m) => (m.id === cur.id ? next : m));
+      accounts = accounts.map((a) => (a.id === cur.accountId ? { ...a, name: next.name } : a));
+      openings.set(cur.accountId, (toPaise(input.openingBalance) ?? 0) * (input.openingBalanceSide === "credit" ? -1 : 1));
+      log("money_account.update", cur.id, next, cur);
+      return moneyView(next);
+    }
+    case "list_opening_balances":
+      return accounts
+        .filter((a) => ["asset", "liability", "equity"].includes(a.kind) && !["receivables", "payables", "opening_balance"].includes(a.systemRole ?? ""))
+        .map((a) => ({ accountId: a.id, code: a.code, name: a.name, kind: a.kind, systemRole: a.systemRole, amountPaise: openings.get(a.id) ?? 0 }));
+    case "set_opening_balance": {
+      const input = args.input as OpeningBalanceInput;
+      const a = accounts.find((x) => x.id === input.accountId) ?? nf("Account not found");
+      if (input.amount && toPaise(input.amount) == null) fail([["amount", "Enter an amount like 1250 or 1250.50."]]);
+      const amt = (toPaise(input.amount) ?? 0) * (input.side === "credit" ? -1 : 1);
+      openings.set(a.id, amt);
+      log("account.opening_balance", a.id, { amountPaise: amt });
+      return { accountId: a.id, code: a.code, name: a.name, kind: a.kind, systemRole: a.systemRole, amountPaise: amt };
+    }
+    case "voucher_accounts":
+      return accounts.filter((a) => a.isActive && !["receivables", "payables", "opening_balance", "round_off"].includes(a.systemRole ?? ""));
+    case "open_documents":
+      return openDocs(args.partyId, args.voucherType);
+    case "list_vouchers":
+      return [...vouchers]
+        .sort((a, b) => (b.voucherDate + b.createdAt).localeCompare(a.voucherDate + a.createdAt))
+        .map((v) => ({
+          id: v.id, voucherType: v.voucherType, status: v.status, number: v.number, voucherDate: v.voucherDate,
+          moneyAccountId: v.moneyAccountId, moneyAccountName: moneyAccounts.find((m) => m.id === v.moneyAccountId)?.name ?? "",
+          partyId: v.partyId, counterparty: parties.find((p) => p.id === v.partyId)?.name ?? accounts.find((a) => a.id === v.counterAccountId)?.name ?? "",
+          amountPaise: v.amountPaise, mode: v.mode, reference: v.reference,
+        }));
+    case "get_voucher":
+      return voucherView(args.id);
+    case "document_settlements":
+      return vouchers
+        .filter((v) => v.status === "posted")
+        .flatMap((v) => v.allocations.filter((a) => a.documentKind === args.documentKind && a.documentId === args.documentId).map((a) => ({ voucherId: v.id, voucherType: v.voucherType, number: v.number, voucherDate: v.voucherDate, amountPaise: a.amountPaise })));
+    case "create_voucher":
+      return createVoucher(args.input as VoucherInput);
+    case "cancel_voucher": {
+      const v = vouchers.find((x) => x.id === args.id) ?? nf("Receipt or payment not found");
+      if (v.status !== "posted") conflict("This is already cancelled.");
+      if (v.rowVersion !== args.expectedVersion) conflict("This record was changed elsewhere. Reload it and try again.");
+      if (!String(args.reason ?? "").trim()) fail([["reason", "Give a reason for cancelling."]]);
+      if (statementLines.some((l) => l.journalEntryId === v.journalEntryId)) conflict("This is reconciled with a bank statement line. Unmatch it first.");
+      for (const a of v.allocations) adjustPaid(a.documentKind, a.documentId, -a.amountPaise);
+      vouchers = vouchers.map((x) => (x.id === v.id ? { ...x, status: "cancelled", cancelEntryId: id(), cancelReason: args.reason, cancelledAt: now(), rowVersion: x.rowVersion + 1 } : x));
+      log("money_voucher.cancel", v.id);
+      return voucherView(v.id);
+    }
+    case "money_book": {
+      const m = moneyAccounts.find((x) => x.id === args.moneyAccountId) ?? nf("Account not found");
+      const all = ledgerLines(m.accountId);
+      const from: string | null = args.from ?? null;
+      const to: string | null = args.to ?? null;
+      const opening = from ? all.filter((l) => l.entryDate < from).reduce((a, l) => a + l.debitPaise - l.creditPaise, 0) : 0;
+      let bal = opening;
+      const lines = all
+        .filter((l) => (!from || l.entryDate >= from) && (!to || l.entryDate <= to))
+        .map((l) => ({ ...l, balancePaise: (bal += l.debitPaise - l.creditPaise) }));
+      return {
+        account: moneyView(m), from, to, openingPaise: opening,
+        debitTotalPaise: lines.reduce((a, l) => a + l.debitPaise, 0), creditTotalPaise: lines.reduce((a, l) => a + l.creditPaise, 0),
+        closingPaise: bal, lines,
+      } satisfies MoneyBook;
+    }
+    case "reconciliation":
+      return reconciliationView(args.moneyAccountId);
+    case "match_statement_line": {
+      const l = statementLines.find((x) => x.id === args.lineId) ?? nf("Statement line not found");
+      const m = moneyAccounts.find((x) => x.id === l.moneyAccountId)!;
+      const entry = ledgerLines(m.accountId).find((b) => b.entryId === args.entryId);
+      if (!entry) fail([["entryId", "That entry doesn't touch this bank account."]]);
+      if (entry!.debitPaise - entry!.creditPaise !== l.depositPaise - l.withdrawalPaise) fail([["entryId", "The entry's amount or direction differs from the statement line."]]);
+      return lineState(l.id, "matched", args.entryId);
+    }
+    case "unmatch_statement_line":
+      return lineState(args.lineId, "unmatched");
+    case "ignore_statement_line":
+      return lineState(args.lineId, "ignored");
+    case "undo_statement_import": {
+      const before = statementLines.length;
+      statementLines = statementLines.filter((l) => !(l.moneyAccountId === args.moneyAccountId && l.importBatch === args.batch && l.status !== "matched"));
+      log("bank_statement.undo_import", args.moneyAccountId, { removed: before - statementLines.length });
+      return before - statementLines.length;
+    }
+    default:
+      return undefined;
+  }
+}
+
+async function statementCommand(command: string, args: Record<string, any>): Promise<unknown> {
+  switch (command) {
+    case "read_statement_file": {
+      const name = String(args.fileName);
+      if (!/\.(csv|txt)$/i.test(name)) throw { code: "invalid", message: "The browser preview reads .csv statements only; the desktop app also reads .xls and .xlsx.", fields: [] } satisfies Fail;
+      const rows = parseCsv(new TextDecoder().decode(new Uint8Array(args.bytes))).filter((r) => r.some((c) => c.trim())).map((r) => r.map((c) => c.trim()));
+      const m = moneyAccounts.find((x) => x.id === args.moneyAccountId) ?? nf("Account not found");
+      const saved = m.statementMapping ? (JSON.parse(m.statementMapping) as StatementMapping) : null;
+      return { fileName: name, rows, mapping: saved ?? suggestMapping(rows), mappingSaved: !!saved } satisfies StatementFile;
+    }
+    case "preview_statement":
+    case "import_statement": {
+      const input = args.input as StatementImportInput;
+      const m = moneyAccounts.find((x) => x.id === input.moneyAccountId) ?? nf("Account not found");
+      const p = parseStatement(input.rows, input.mapping);
+      const existing = new Set(statementLines.filter((l) => l.moneyAccountId === m.id).map((l) => l.fingerprint));
+      const fps = withFingerprints(m.id, p.lines);
+      if (command === "preview_statement") {
+        for (const { line, fp } of fps) line.duplicate = existing.has(fp);
+        const fresh = p.lines.filter((l) => !l.duplicate);
+        const dates = p.lines.map((l) => l.lineDate).sort();
+        return { ...p, newLines: fresh.length, duplicates: p.lines.length - fresh.length, depositsPaise: fresh.reduce((a, l) => a + l.depositPaise, 0), withdrawalsPaise: fresh.reduce((a, l) => a + l.withdrawalPaise, 0), firstDate: dates[0] ?? null, lastDate: dates.at(-1) ?? null } satisfies StatementPreview;
+      }
+      if (m.kind !== "bank") throw { code: "invalid", message: "Statements are imported into bank accounts.", fields: [] } satisfies Fail;
+      if (!p.lines.length) throw { code: "invalid", message: "No transactions found with this column mapping.", fields: [] } satisfies Fail;
+      const batch = id();
+      let imported = 0;
+      for (const { line, fp } of fps) {
+        if (existing.has(fp)) continue;
+        imported++;
+        statementLines.push({
+          id: id(), organisationId: org!.id, moneyAccountId: m.id, lineDate: line.lineDate, description: line.description, reference: line.reference,
+          withdrawalPaise: line.withdrawalPaise, depositPaise: line.depositPaise, balancePaise: line.balancePaise, fingerprint: fp, importBatch: batch,
+          sourceFile: input.fileName, status: "unmatched", journalEntryId: null, matchedAt: null, matchedBy: null, createdAt: now(),
+        });
+      }
+      moneyAccounts = moneyAccounts.map((x) => (x.id === m.id ? { ...x, statementMapping: JSON.stringify(input.mapping) } : x));
+      log("bank_statement.import", m.id, { file: input.fileName, imported });
+      return { batch, imported, duplicates: p.lines.length - imported, skipped: p.skipped.length } satisfies StatementImportResult;
+    }
+    default:
+      return bankingCommand(command, args);
+  }
+}
+
 export async function previewBackend(command: string, args: Record<string, any> = {}): Promise<unknown> {
   await new Promise((r) => setTimeout(r, 120)); // feel like real IPC
   switch (command) {
     case "app_health":
-      return { appVersion: "0.1.0", schemaVersion: 5, database: "(browser preview — in memory)", organisationConfigured: !!org };
+      return { appVersion: "0.1.0", schemaVersion: 6, database: "(browser preview — in memory)", organisationConfigured: !!org };
     case "dashboard_summary":
       return {
-        salesThisMonth: "0", purchasesThisMonth: "0", cashAndBank: "0", customerDues: "0", estimatedGstPayable: "0",
+        salesThisMonth: "0", purchasesThisMonth: "0",
+        cashAndBank: (() => {
+          ensureMoneyAccounts();
+          const p = moneyAccounts.reduce((a, m) => a + moneyView(m).balancePaise, 0);
+          return (p / 100).toFixed(2);
+        })(), customerDues: "0", estimatedGstPayable: "0",
         registrations: regs.map((r) => ({ gstin: r.gstin, filingFrequency: r.filingFrequency })),
         organisationConfigured: !!org,
       };
@@ -918,7 +1438,7 @@ export async function previewBackend(command: string, args: Record<string, any> 
     case "list_audit_events":
       return audit.slice(0, args.limit ?? 100);
     default: {
-      const r = masters(command, args) ?? salesCommand(command, args) ?? (await purchaseCommand(command, args));
+      const r = masters(command, args) ?? salesCommand(command, args) ?? (await purchaseCommand(command, args)) ?? (await statementCommand(command, args));
       if (r !== undefined) return r;
       throw { code: "not_found", message: `Unknown command ${command}`, fields: [] } satisfies Fail;
     }

@@ -5,35 +5,49 @@
 @custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
 
 /* ---------------------------------------------------------------------------
-   Design tokens (spec §6.1, §6.5). Defined once per theme; components only
+   Design tokens (spec §6.1, §6.5), from the AccountsVU brand kit
+   (docs/brand-kit/brand.md). Defined once per theme; components only
    reference semantic names.
+
+   Brand palette: primary #0A84FF, light #5EB1FF, text #1D1D1F, secondary
+   text #6E6E73, surface #F2F2F7, background #FAFAFC, success #34C759,
+   warning #FF9F0A, error #FF3B30. Where a brand hue is too light for small
+   text on a light surface (WCAG AA 4.5:1), the text token uses a deeper
+   shade of the same hue and the brand hue drives fills, dots and tints.
    ------------------------------------------------------------------------- */
 :root {
-  --bg: #f5f5f7;
+  --brand: #0a84ff;
+  --brand-light: #5eb1ff;
+  --brand-gradient: linear-gradient(135deg, #5eb1ff 0%, #0a84ff 55%, #0066e0 100%);
+
+  --bg: #fafafc;
   --surface: #ffffff;
-  --surface-2: #f9f9fb;
+  --surface-2: #f2f2f7;
   --surface-hover: rgba(0, 0, 0, 0.04);
   --surface-active: rgba(0, 0, 0, 0.07);
   --fg: #1d1d1f;
-  --fg-muted: #5f5f66;   /* 6.2:1 on white — AA for body text */
-  --fg-subtle: #86868b;  /* icons and large text only */
+  --fg-muted: #6e6e73;   /* 5.0:1 on white — AA for body text */
+  --fg-subtle: #8e8e93;  /* icons and large text only */
   --line: rgba(0, 0, 0, 0.08);
   --line-strong: rgba(0, 0, 0, 0.14);
-  --accent: #0066d6;     /* text/icons on light surfaces */
-  --accent-fill: #0071e3;/* button backgrounds (white text 4.6:1) */
-  --accent-fill-hover: #0077ed;
-  --accent-soft: rgba(0, 113, 227, 0.1);
-  --success: #1a7f37;
-  --success-soft: rgba(26, 127, 55, 0.1);
-  --warning: #9a6700;
-  --warning-soft: rgba(191, 135, 0, 0.12);
-  --danger: #c9252d;
-  --danger-soft: rgba(201, 37, 45, 0.1);
-  --material: rgba(246, 246, 248, 0.72);
+  --accent: #0a6fd8;     /* brand blue, deepened for text on light surfaces */
+  --accent-fill: #0a7cf5;/* buttons: brand blue at AA for 14px semibold white text */
+  --accent-fill-hover: #0a84ff;
+  --accent-soft: rgba(10, 132, 255, 0.1);
+  --success: #248a3d;
+  --success-dot: #34c759;
+  --success-soft: rgba(52, 199, 89, 0.13);
+  --warning: #a35a00;
+  --warning-dot: #ff9f0a;
+  --warning-soft: rgba(255, 159, 10, 0.15);
+  --danger: #d70015;
+  --danger-dot: #ff3b30;
+  --danger-soft: rgba(255, 59, 48, 0.1);
+  --material: rgba(250, 250, 252, 0.74);
   --material-edge: rgba(255, 255, 255, 0.6);
   --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.04), 0 1px 1px rgba(0, 0, 0, 0.02);
   --shadow-raised: 0 8px 28px rgba(0, 0, 0, 0.08), 0 1px 3px rgba(0, 0, 0, 0.06);
-  --focus-ring: 0 0 0 3px rgba(0, 113, 227, 0.35);
+  --focus-ring: 0 0 0 3px rgba(10, 132, 255, 0.35);
 
   /* Motion tokens (animate skill: strong curves, short UI durations) */
   --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
@@ -46,37 +60,52 @@
 }
 
 [data-theme="dark"] {
-  --bg: #161618;
-  --surface: #1f1f22;
-  --surface-2: #26262a;
+  --brand: #0a84ff;
+  --brand-light: #5eb1ff;
+  --brand-gradient: linear-gradient(135deg, #5eb1ff 0%, #0a84ff 55%, #0066e0 100%);
+
+  --bg: #141416;
+  --surface: #1c1c1e;
+  --surface-2: #2c2c2e;
   --surface-hover: rgba(255, 255, 255, 0.05);
   --surface-active: rgba(255, 255, 255, 0.09);
   --fg: #f5f5f7;
-  --fg-muted: #a8a8ae;
+  --fg-muted: #aeaeb2;
   --fg-subtle: #7c7c82;
   --line: rgba(255, 255, 255, 0.08);
   --line-strong: rgba(255, 255, 255, 0.15);
-  --accent: #4ba3ff;
-  --accent-fill: #0071e3;
-  --accent-fill-hover: #0a7cf0;
+  --accent: #5eb1ff;     /* brand light blue reads best on dark */
+  --accent-fill: #0a84ff;
+  --accent-fill-hover: #2a94ff;
   --accent-soft: rgba(10, 132, 255, 0.2);
-  --success: #3fb950;
-  --success-soft: rgba(63, 185, 80, 0.14);
-  --warning: #d6a531;
-  --warning-soft: rgba(214, 165, 49, 0.14);
-  --danger: #ff6b6b;
-  --danger-soft: rgba(255, 107, 107, 0.14);
-  --material: rgba(30, 30, 33, 0.72);
+  --success: #30d158;
+  --success-dot: #30d158;
+  --success-soft: rgba(48, 209, 88, 0.15);
+  --warning: #ff9f0a;
+  --warning-dot: #ff9f0a;
+  --warning-soft: rgba(255, 159, 10, 0.16);
+  --danger: #ff453a;
+  --danger-dot: #ff453a;
+  --danger-soft: rgba(255, 69, 58, 0.16);
+  --material: rgba(28, 28, 30, 0.74);
   --material-edge: rgba(255, 255, 255, 0.06);
   --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.3);
   --shadow-raised: 0 10px 32px rgba(0, 0, 0, 0.45), 0 1px 3px rgba(0, 0, 0, 0.3);
-  --focus-ring: 0 0 0 3px rgba(75, 163, 255, 0.45);
+  --focus-ring: 0 0 0 3px rgba(94, 177, 255, 0.45);
 
   color-scheme: dark;
 }
 
 @theme inline {
-  --font-sans: "Inter Variable", "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+  /* Brand type: SF Pro where the platform has it (macOS), Inter elsewhere. */
+  --font-sans: "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Inter Variable",
+    "Inter", system-ui, "Segoe UI", sans-serif;
+
+  --color-brand: var(--brand);
+  --color-brand-light: var(--brand-light);
+  --color-success-dot: var(--success-dot);
+  --color-warning-dot: var(--warning-dot);
+  --color-danger-dot: var(--danger-dot);
 
   --color-bg: var(--bg);
   --color-surface: var(--surface);

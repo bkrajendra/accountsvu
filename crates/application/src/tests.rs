@@ -2887,16 +2887,31 @@ async fn statement_import_reconciles_against_the_books() {
 }
 
 #[tokio::test]
-async fn operators_cannot_post_receipts() {
+async fn operators_record_receipts_but_cannot_cancel_them() {
     let s = shop().await;
     let bank = money_account(&s.core, "bank").await;
     let op = RequestContext {
         actor: user("op", Role::Operator),
         ..ctx()
     };
-    let err = s
+    let v = s
         .core
         .create_voucher(&op, &receipt(&s.customer, &bank, "2026-11-10", "100"))
+        .await
+        .unwrap();
+    let err = s
+        .core
+        .cancel_voucher(&op, &v.voucher.id, "x", v.voucher.row_version)
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), "forbidden");
+    let auditor = RequestContext {
+        actor: user("au", Role::Auditor),
+        ..ctx()
+    };
+    let err = s
+        .core
+        .create_voucher(&auditor, &receipt(&s.customer, &bank, "2026-11-10", "100"))
         .await
         .unwrap_err();
     assert_eq!(err.code(), "forbidden");

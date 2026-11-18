@@ -14,6 +14,11 @@ import { SalesDocument } from "./pages/sales/SalesDocument";
 import { Purchases } from "./pages/purchases/Purchases";
 import { PurchaseEditor } from "./pages/purchases/PurchaseEditor";
 import { PurchaseDocument } from "./pages/purchases/PurchaseDocument";
+import { Banking } from "./pages/banking/Banking";
+import { VoucherEditor } from "./pages/banking/VoucherEditor";
+import { VoucherDocument } from "./pages/banking/VoucherDocument";
+import { MoneyBook } from "./pages/banking/MoneyBook";
+import { Reconcile } from "./pages/banking/Reconcile";
 import { Setup } from "./pages/Setup";
 import { ToastProvider } from "./components/Toast";
 
@@ -42,8 +47,13 @@ const router = createHashRouter([
       { path: "purchases/:id/edit", element: <PurchaseEditor /> },
       { path: "parties", element: <Parties /> },
       { path: "items", element: <Items /> },
+      { path: "banking", element: <Banking /> },
+      { path: "banking/vouchers/new", element: <VoucherEditor /> },
+      { path: "banking/vouchers/:id", element: <VoucherDocument /> },
+      { path: "banking/accounts/:id", element: <MoneyBook /> },
+      { path: "banking/accounts/:id/reconcile", element: <Reconcile /> },
       ...primaryNav
-        .filter((n) => !["/", "/sales", "/purchases", "/parties", "/items"].includes(n.path))
+        .filter((n) => !["/", "/sales", "/purchases", "/parties", "/items", "/banking"].includes(n.path))
         .map((n) => ({ path: n.path.slice(1), element: <Placeholder item={n} /> })),
       { path: "settings", element: <Settings /> },
     ],

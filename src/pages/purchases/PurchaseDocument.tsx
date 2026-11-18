@@ -13,6 +13,7 @@ import { Badge, Button, Card } from "../../components/ui";
 import { Dialog } from "../../components/Dialog";
 import { ChoiceCards, Field, TextInput } from "../../components/form";
 import { AttachmentsPanel } from "../../components/Attachments";
+import { SettlementsCard } from "../banking/Settlements";
 
 const tax = (l: PurchaseLine) => l.cgstPaise + l.sgstPaise + l.utgstPaise + l.igstPaise + l.cessPaise;
 
@@ -66,7 +67,7 @@ export function PurchaseDocument() {
               </Link>
             </>
           )}
-          {recorded && (
+          {recorded && (doc.paymentMode !== "credit" || doc.paidPaise === 0) && (
             <Button onClick={() => setCancelling(true)}>
               <Ban size={15} /> Cancel
             </Button>
@@ -165,6 +166,9 @@ export function PurchaseDocument() {
               <p className="mt-1 text-muted">{doc.cancelReason}</p>
               <p className="mt-2 text-[12px] text-subtle">A reversing entry was posted, including any ITC decisions.</p>
             </Card>
+          )}
+          {recorded && doc.docType !== "debit_note" && (
+            <SettlementsCard kind="purchase" documentId={doc.id} partyId={doc.partyId} totalPaise={doc.totalPaise} paidPaise={doc.paidPaise} adjustedPaise={doc.debitedPaise} open={doc.paymentMode === "credit"} />
           )}
           <AttachmentsPanel documentId={doc.id} attachments={doc.attachments} editable={doc.status === "draft"} />
           {doc.docType === "bill" && doc.status !== "draft" && (

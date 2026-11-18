@@ -131,7 +131,7 @@ export function Combobox({
         }}
         onKeyDown={onKeyDown}
         className={clsx(
-          "h-9 w-full rounded-[9px] border bg-surface pl-3 pr-8 text-[13.5px] placeholder:text-subtle focus:shadow-[var(--focus-ring)] focus:outline-none",
+          "h-9 w-full rounded-[10px] border bg-surface pl-3 pr-8 text-[13.5px] placeholder:text-subtle focus:shadow-[var(--focus-ring)] focus:outline-none",
           invalid ? "border-danger" : "border-line-strong focus:border-accent-fill",
         )}
       />

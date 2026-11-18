@@ -3,7 +3,7 @@ import { useId, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttribu
 import { AlertCircle, ChevronDown } from "lucide-react";
 
 const control =
-  "h-9 w-full rounded-[9px] border bg-surface px-3 text-[13.5px] text-fg placeholder:text-subtle " +
+  "h-9 w-full rounded-[10px] border bg-surface px-3 text-[13.5px] text-fg placeholder:text-subtle " +
   "transition-[border-color,box-shadow] duration-150 focus:outline-none focus:shadow-[var(--focus-ring)] " +
   "disabled:cursor-not-allowed disabled:bg-surface-2 disabled:text-muted";
 

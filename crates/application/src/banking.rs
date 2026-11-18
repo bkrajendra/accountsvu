@@ -1219,7 +1219,9 @@ impl<S: Store> AppCore<S> {
         ctx: &RequestContext,
         input: &VoucherInput,
     ) -> AppResult<VoucherView> {
-        ctx.require(Permission::PostDocuments)?;
+        // Spec §2 roles: operators record receipts and payments; cancelling
+        // and reconciling stay with owners and accountants.
+        ctx.require(Permission::PrepareDocuments)?;
         let mut uow = self.store.begin().await?;
         let org = self.require_org(ctx, &mut uow).await?;
         let mut e = Errors::new("");
@@ -1821,7 +1823,12 @@ impl<S: Store> AppCore<S> {
         let lines = uow.list_statement_lines(&org.id, &m.id).await?;
         let free: Vec<&BookLineRecord> = book
             .iter()
-            .filter(|b| b.statement_line_id.is_none() && net(b) != 0)
+            // Opening balances are not bank transactions.
+            .filter(|b| {
+                b.statement_line_id.is_none()
+                    && net(b) != 0
+                    && !b.source_type.ends_with("opening_balance")
+            })
             .collect();
         let mut views = Vec::with_capacity(lines.len());
         for l in lines {

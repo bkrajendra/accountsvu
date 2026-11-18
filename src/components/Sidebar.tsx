@@ -2,6 +2,7 @@ import { NavLink } from "react-router";
 import clsx from "clsx";
 import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import { primaryNav, settingsNav, type NavItem } from "../lib/nav";
+import { BrandMark, Wordmark } from "./Brand";
 
 interface SidebarProps {
   collapsed: boolean;
@@ -26,8 +27,8 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
         <Logo />
         {!collapsed && (
           <div className="leading-tight">
-            <div className="text-[15px] font-semibold tracking-[-0.015em]">AccountsVU</div>
-            <div className="text-[11px] font-medium text-muted">Books &amp; GST</div>
+            <Wordmark />
+            <div className="text-[11px] font-medium text-muted">Accounting &amp; GST</div>
           </div>
         )}
       </div>
@@ -84,15 +85,5 @@ function SidebarLink({ item, collapsed }: { item: NavItem; collapsed: boolean })
 }
 
 function Logo() {
-  return (
-    <div
-      aria-hidden
-      className="grid size-8 shrink-0 place-items-center rounded-[9px] bg-gradient-to-b from-[#2b8cff] to-[#0062d1] text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.25),0_1px_2px_rgba(0,0,0,0.2)]"
-    >
-      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M4 6l8 13 8-13" />
-        <path d="M8.5 6h7" opacity="0.7" />
-      </svg>
-    </div>
-  );
+  return <BrandMark size={30} />;
 }
