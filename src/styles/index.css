@@ -1,0 +1,356 @@
+@import "tailwindcss";
+
+/* Dark variant follows the resolved theme attribute, not the media query,
+   so the in-app switcher wins over the OS setting. */
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+/* ---------------------------------------------------------------------------
+   Design tokens (spec §6.1, §6.5). Defined once per theme; components only
+   reference semantic names.
+   ------------------------------------------------------------------------- */
+:root {
+  --bg: #f5f5f7;
+  --surface: #ffffff;
+  --surface-2: #f9f9fb;
+  --surface-hover: rgba(0, 0, 0, 0.04);
+  --surface-active: rgba(0, 0, 0, 0.07);
+  --fg: #1d1d1f;
+  --fg-muted: #5f5f66;   /* 6.2:1 on white — AA for body text */
+  --fg-subtle: #86868b;  /* icons and large text only */
+  --line: rgba(0, 0, 0, 0.08);
+  --line-strong: rgba(0, 0, 0, 0.14);
+  --accent: #0066d6;     /* text/icons on light surfaces */
+  --accent-fill: #0071e3;/* button backgrounds (white text 4.6:1) */
+  --accent-fill-hover: #0077ed;
+  --accent-soft: rgba(0, 113, 227, 0.1);
+  --success: #1a7f37;
+  --success-soft: rgba(26, 127, 55, 0.1);
+  --warning: #9a6700;
+  --warning-soft: rgba(191, 135, 0, 0.12);
+  --danger: #c9252d;
+  --danger-soft: rgba(201, 37, 45, 0.1);
+  --material: rgba(246, 246, 248, 0.72);
+  --material-edge: rgba(255, 255, 255, 0.6);
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.04), 0 1px 1px rgba(0, 0, 0, 0.02);
+  --shadow-raised: 0 8px 28px rgba(0, 0, 0, 0.08), 0 1px 3px rgba(0, 0, 0, 0.06);
+  --focus-ring: 0 0 0 3px rgba(0, 113, 227, 0.35);
+
+  /* Motion tokens (animate skill: strong curves, short UI durations) */
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+  --dur-press: 120ms;
+  --dur-fast: 160ms;
+  --dur-base: 220ms;
+
+  color-scheme: light;
+}
+
+[data-theme="dark"] {
+  --bg: #161618;
+  --surface: #1f1f22;
+  --surface-2: #26262a;
+  --surface-hover: rgba(255, 255, 255, 0.05);
+  --surface-active: rgba(255, 255, 255, 0.09);
+  --fg: #f5f5f7;
+  --fg-muted: #a8a8ae;
+  --fg-subtle: #7c7c82;
+  --line: rgba(255, 255, 255, 0.08);
+  --line-strong: rgba(255, 255, 255, 0.15);
+  --accent: #4ba3ff;
+  --accent-fill: #0071e3;
+  --accent-fill-hover: #0a7cf0;
+  --accent-soft: rgba(10, 132, 255, 0.2);
+  --success: #3fb950;
+  --success-soft: rgba(63, 185, 80, 0.14);
+  --warning: #d6a531;
+  --warning-soft: rgba(214, 165, 49, 0.14);
+  --danger: #ff6b6b;
+  --danger-soft: rgba(255, 107, 107, 0.14);
+  --material: rgba(30, 30, 33, 0.72);
+  --material-edge: rgba(255, 255, 255, 0.06);
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-raised: 0 10px 32px rgba(0, 0, 0, 0.45), 0 1px 3px rgba(0, 0, 0, 0.3);
+  --focus-ring: 0 0 0 3px rgba(75, 163, 255, 0.45);
+
+  color-scheme: dark;
+}
+
+@theme inline {
+  --font-sans: "Inter Variable", "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-hover: var(--surface-hover);
+  --color-active: var(--surface-active);
+  --color-fg: var(--fg);
+  --color-muted: var(--fg-muted);
+  --color-subtle: var(--fg-subtle);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-accent: var(--accent);
+  --color-accent-fill: var(--accent-fill);
+  --color-accent-soft: var(--accent-soft);
+  --color-success: var(--success);
+  --color-success-soft: var(--success-soft);
+  --color-warning: var(--warning);
+  --color-warning-soft: var(--warning-soft);
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+
+  --shadow-card: var(--shadow-card);
+  --shadow-raised: var(--shadow-raised);
+
+  --ease-out-strong: var(--ease-out);
+}
+
+/* ---------------------------------------------------------------------------
+   Base
+   ------------------------------------------------------------------------- */
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-sans);
+  font-size: 0.875rem;          /* 14px desktop UI base */
+  line-height: 1.5;
+  letter-spacing: -0.006em;     /* Inter at small sizes: near-neutral tracking */
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  overflow: hidden;             /* the shell owns scrolling */
+  user-select: none;            /* desktop app feel; re-enabled on content below */
+}
+
+input,
+textarea,
+[data-selectable],
+.selectable {
+  user-select: text;
+}
+
+/* Headings: tighter tracking and leading as size grows (apple-design §15). */
+.text-display {
+  font-size: 1.75rem;
+  line-height: 1.15;
+  letter-spacing: -0.022em;
+  font-weight: 650;
+}
+.text-title {
+  font-size: 1.0625rem;
+  line-height: 1.3;
+  letter-spacing: -0.014em;
+  font-weight: 600;
+}
+
+/* Every amount uses tabular figures so columns line up. */
+.num {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+}
+
+:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  border-radius: 8px;
+}
+
+/* Thin, quiet scrollbars */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-strong) transparent;
+}
+
+/* ---------------------------------------------------------------------------
+   Materials (apple-design §12): translucent chrome over the canvas.
+   ------------------------------------------------------------------------- */
+.material {
+  background: var(--material);
+  backdrop-filter: blur(24px) saturate(180%);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+}
+
+/* ---------------------------------------------------------------------------
+   Motion
+   ------------------------------------------------------------------------- */
+
+/* Press feedback on pointer-down — tens of uses a day, so fast and subtle. */
+.pressable {
+  transition:
+    transform var(--dur-press) var(--ease-out),
+    background-color var(--dur-fast) ease,
+    color var(--dur-fast) ease,
+    box-shadow var(--dur-fast) ease;
+}
+.pressable:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+/* Theme change: brief cross-fade of colours instead of a hard flash.
+   The class is added for one transition window by setTheme(). */
+html.theme-transition,
+html.theme-transition *,
+html.theme-transition *::before,
+html.theme-transition *::after {
+  transition:
+    background-color 240ms ease,
+    border-color 240ms ease,
+    color 240ms ease,
+    fill 240ms ease,
+    box-shadow 240ms ease !important;
+}
+
+/* First-launch entrance for overview cards (rare → small delight budget). */
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.985);
+  }
+}
+.rise-in {
+  animation: rise-in 420ms var(--ease-out) both;
+  animation-delay: calc(var(--i, 0) * 45ms);
+}
+
+/* Popover entrance, scaled from its trigger (set transform-origin inline). */
+@keyframes pop-in {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+}
+.pop-in {
+  animation: pop-in var(--dur-fast) var(--ease-out);
+}
+
+/* ---------------------------------------------------------------------------
+   Accessibility preferences (apple-design §14)
+   ------------------------------------------------------------------------- */
+@media (prefers-reduced-motion: reduce) {
+  .pressable:active:not(:disabled) {
+    transform: none;
+  }
+  .rise-in,
+  .pop-in {
+    animation-name: fade-in;
+  }
+  [data-motion="slide"] {
+    transition-property: opacity !important;
+  }
+}
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .material {
+    background: var(--surface-2);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+}
+
+@media (prefers-contrast: more) {
+  :root {
+    --line: rgba(0, 0, 0, 0.3);
+    --line-strong: rgba(0, 0, 0, 0.5);
+    --fg-muted: #3a3a3f;
+  }
+  [data-theme="dark"] {
+    --line: rgba(255, 255, 255, 0.35);
+    --line-strong: rgba(255, 255, 255, 0.55);
+    --fg-muted: #d0d0d6;
+  }
+  .material {
+    background: var(--surface);
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   Dialog (native <dialog>): scale + fade in, scrim fades. Centred, so no
+   trigger-anchored origin. Occasional → standard 220ms strong ease-out.
+   ------------------------------------------------------------------------- */
+.dialog {
+  max-width: none;
+  max-height: none;
+  overflow: hidden;
+}
+.dialog[open] {
+  animation: dialog-in var(--dur-base) var(--ease-out);
+}
+.dialog::backdrop {
+  background: rgba(0, 0, 0, 0.32);
+  backdrop-filter: blur(2px);
+  animation: fade-in var(--dur-base) var(--ease-out);
+}
+[data-theme="dark"] .dialog::backdrop {
+  background: rgba(0, 0, 0, 0.55);
+}
+@keyframes dialog-in {
+  from {
+    opacity: 0;
+    transform: scale(0.97) translateY(4px);
+  }
+}
+
+/* Toasts: transitions so rapid triggers retarget instead of restarting. */
+.toast {
+  transition:
+    transform var(--dur-base) var(--ease-out),
+    opacity var(--dur-base) var(--ease-out);
+}
+@starting-style {
+  .toast {
+    opacity: 0;
+    transform: translateY(12px) scale(0.98);
+  }
+}
+.toast-leaving {
+  opacity: 0;
+  transform: translateY(12px) scale(0.98);
+}
+
+/* Wizard step change: content slides in the travel direction
+   (spatial consistency); reduced motion gets a cross-fade. */
+@keyframes step-from-right {
+  from {
+    opacity: 0;
+    transform: translateX(24px);
+  }
+}
+@keyframes step-from-left {
+  from {
+    opacity: 0;
+    transform: translateX(-24px);
+  }
+}
+.step-forward {
+  animation: step-from-right 260ms var(--ease-out);
+}
+.step-back {
+  animation: step-from-left 260ms var(--ease-out);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dialog[open],
+  .step-forward,
+  .step-back {
+    animation-name: fade-in;
+  }
+  .toast,
+  .toast-leaving {
+    transform: none;
+  }
+  @starting-style {
+    .toast {
+      transform: none;
+    }
+  }
+}

@@ -1,0 +1,238 @@
+import type { CSSProperties, ReactNode } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { useNavigate } from "react-router";
+import {
+  AlertTriangle,
+  ArrowRight,
+  Building2,
+  CalendarClock,
+  CircleCheck,
+  FileWarning,
+  HardDriveDownload,
+  Info,
+  Landmark,
+  Receipt,
+  ShoppingBag,
+  Users,
+  type LucideIcon,
+} from "lucide-react";
+import clsx from "clsx";
+import { api, keys, type MoneyString } from "../lib/api";
+import { formatInr, greeting, monthBounds, monthLabel } from "../lib/format";
+import { Badge, Button, Card, PageHeader } from "../components/ui";
+
+// The entrance plays once per app launch — the overview is revisited often,
+// so repeat visits render instantly (animate skill: frequency gate).
+let hasAnimated = false;
+
+export function Overview() {
+  const { start, end } = monthBounds();
+  const { data, isLoading } = useQuery({
+    queryKey: ["dashboard", start, end],
+    queryFn: () => api.dashboardSummary(start, end),
+  });
+
+  const navigate = useNavigate();
+  const { data: profile } = useQuery({ queryKey: keys.profile, queryFn: api.businessProfile });
+  const reg = profile?.registrations.find((r) => r.status === "active");
+  const animate = !hasAnimated;
+  hasAnimated = true;
+  const configured = data?.organisationConfigured ?? true;
+
+  const cards: { label: string; value?: MoneyString; icon: LucideIcon; hint: string; estimate?: boolean }[] = [
+    { label: "Sales this month", value: data?.salesThisMonth, icon: Receipt, hint: monthLabel() },
+    { label: "Purchases this month", value: data?.purchasesThisMonth, icon: ShoppingBag, hint: monthLabel() },
+    { label: "Cash & bank", value: data?.cashAndBank, icon: Landmark, hint: "All accounts" },
+    { label: "Customer dues", value: data?.customerDues, icon: Users, hint: "Outstanding receivables" },
+    {
+      label: "GST payable",
+      value: data?.estimatedGstPayable,
+      icon: FileWarning,
+      hint: "From books",
+      estimate: true,
+    },
+  ];
+
+  return (
+    <>
+      <PageHeader
+        title={greeting()}
+        subtitle={new Date().toLocaleDateString("en-IN", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}
+        actions={
+          <>
+            <Button>
+              <ShoppingBag size={15} /> Record bill
+            </Button>
+            <Button variant="primary">
+              <Receipt size={15} /> New invoice
+            </Button>
+          </>
+        }
+      />
+
+      {!configured && (
+        <Card className={clsx("mb-6 overflow-hidden", animate && "rise-in")}>
+          <div className="flex items-center gap-5 p-5">
+            <div className="grid size-11 shrink-0 place-items-center rounded-xl bg-accent-soft text-accent">
+              <Building2 size={22} strokeWidth={1.8} />
+            </div>
+            <div className="min-w-0 flex-1">
+              <h2 className="text-title">Set up your business</h2>
+              <p className="mt-0.5 text-muted">
+                Add your legal name, GSTIN and financial year. It takes about two minutes, and you can change it later.
+              </p>
+            </div>
+            <Button variant="primary" className="shrink-0" onClick={() => navigate("/setup")}>
+              Get started <ArrowRight size={15} />
+            </Button>
+          </div>
+        </Card>
+      )}
+
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-3 xl:grid-cols-5">
+        {cards.map((c, i) => (
+          <Card
+            key={c.label}
+            className={clsx("flex flex-col p-4", animate && "rise-in")}
+            style={{ "--i": i } as CSSProperties}
+          >
+            <div className="flex items-center justify-between">
+              <span className="text-[12.5px] font-medium text-muted">{c.label}</span>
+              <c.icon size={16} className="text-subtle" aria-hidden />
+            </div>
+            <div className={clsx("num mt-3 text-[22px] font-semibold tracking-[-0.02em]", isLoading && "text-subtle")}>
+              {c.value === undefined ? "—" : formatInr(c.value)}
+            </div>
+            <div className="mt-auto flex items-center gap-1.5 pt-2 text-[12px] text-muted">
+              {c.estimate && <Badge tone="warning">Estimate</Badge>}
+              <span className="truncate">{c.hint}</span>
+            </div>
+          </Card>
+        ))}
+      </div>
+
+      <div className="mt-6 grid gap-4 lg:grid-cols-[1.6fr_1fr]">
+        <Card className={clsx(animate && "rise-in")} style={{ "--i": 5 } as CSSProperties}>
+          <div className="flex items-center justify-between border-b border-line px-5 py-3.5">
+            <h2 className="text-title">Next actions</h2>
+            <span className="text-[12px] text-muted">Exceptions first</span>
+          </div>
+          <ul className="divide-y divide-line">
+            {!configured ? (
+              <ActionRow
+                icon={Building2}
+                tone="accent"
+                title="Complete business & GST profile"
+                detail="Needed before you can issue tax invoices."
+                status={<Badge tone="accent">To do</Badge>}
+                onClick={() => navigate("/setup")}
+              />
+            ) : (
+              !reg && (
+                <ActionRow
+                  icon={Building2}
+                  tone="neutral"
+                  title="Add your GSTIN when you register"
+                  detail="You're set up as unregistered, so you issue bills of supply."
+                  status={<Badge>Optional</Badge>}
+                  onClick={() => navigate("/settings?tab=gst")}
+                />
+              )
+            )}
+            <ActionRow
+              icon={CalendarClock}
+              tone="neutral"
+              title="GSTR-1 and GSTR-3B"
+              detail={
+                reg
+                  ? `${reg.filingFrequency === "monthly" ? "Monthly" : "Quarterly"} filer · due dates arrive with the GST workbench.`
+                  : "Due dates appear once a GSTIN and filing frequency are set."
+              }
+              status={reg ? <Badge>Phase 2</Badge> : <Badge>Not configured</Badge>}
+            />
+            <ActionRow
+              icon={AlertTriangle}
+              tone="neutral"
+              title="GSTR-2B mismatches"
+              detail="Import your 2B statement to reconcile input tax credit."
+              status={<Badge>Phase 2</Badge>}
+            />
+            <ActionRow
+              icon={HardDriveDownload}
+              tone="warning"
+              title="No backup yet"
+              detail="Encrypted backups arrive with Phase 1.7. Keep your data folder safe meanwhile."
+              status={<Badge tone="warning" icon={<AlertTriangle size={11} />}>Attention</Badge>}
+            />
+          </ul>
+        </Card>
+
+        <Card className={clsx("p-5", animate && "rise-in")} style={{ "--i": 6 } as CSSProperties}>
+          <h2 className="text-title">Books health</h2>
+          <ul className="mt-4 space-y-3.5 text-[13.5px]">
+            <HealthRow ok label="Journals balance" />
+            <HealthRow ok label="Posted entries are immutable" />
+            <HealthRow ok label="Data stored on this computer" />
+            <HealthRow label="Period lock not yet configured" />
+          </ul>
+          <p className="mt-5 flex gap-2 rounded-xl bg-surface-2 p-3 text-[12.5px] text-muted">
+            <Info size={15} className="mt-px shrink-0 text-subtle" aria-hidden />
+            Tax figures are estimates from your books until a return is filed with an ARN.
+          </p>
+        </Card>
+      </div>
+    </>
+  );
+}
+
+function ActionRow({
+  icon: Icon,
+  tone,
+  title,
+  detail,
+  status,
+  onClick,
+}: {
+  icon: LucideIcon;
+  tone: "accent" | "warning" | "neutral";
+  title: string;
+  detail: string;
+  status: ReactNode;
+  onClick?: () => void;
+}) {
+  return (
+    <li>
+      <button type="button" onClick={onClick} className="group flex w-full items-center gap-4 px-5 py-3.5 text-left transition-colors duration-150 hover:bg-hover">
+        <span
+          className={clsx(
+            "grid size-9 shrink-0 place-items-center rounded-[10px]",
+            tone === "accent" && "bg-accent-soft text-accent",
+            tone === "warning" && "bg-warning-soft text-warning",
+            tone === "neutral" && "bg-active text-muted",
+          )}
+        >
+          <Icon size={17} strokeWidth={1.9} />
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="block font-medium">{title}</span>
+          <span className="block truncate text-[12.5px] text-muted">{detail}</span>
+        </span>
+        {status}
+        <ArrowRight size={15} className="text-subtle opacity-0 transition-opacity duration-150 group-hover:opacity-100" aria-hidden />
+      </button>
+    </li>
+  );
+}
+
+function HealthRow({ ok = false, label }: { ok?: boolean; label: string }) {
+  return (
+    <li className="flex items-center gap-2.5">
+      {ok ? (
+        <CircleCheck size={17} className="text-success" aria-label="OK" />
+      ) : (
+        <AlertTriangle size={17} className="text-warning" aria-label="Needs attention" />
+      )}
+      <span className={ok ? "" : "text-muted"}>{label}</span>
+    </li>
+  );
+}

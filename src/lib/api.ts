@@ -1,0 +1,796 @@
+import { invoke, isTauri } from "@tauri-apps/api/core";
+import { previewBackend } from "./preview";
+
+/** Money crosses IPC as a decimal string (never a JS float) — see crates/domain/src/money.rs. */
+export type MoneyString = string;
+
+export interface HealthInfo {
+  appVersion: string;
+  schemaVersion: number;
+  database: string;
+  organisationConfigured: boolean;
+}
+
+export interface GstContext {
+  gstin: string;
+  filingFrequency: "monthly" | "quarterly";
+}
+
+export interface DashboardSummary {
+  salesThisMonth: MoneyString;
+  purchasesThisMonth: MoneyString;
+  cashAndBank: MoneyString;
+  customerDues: MoneyString;
+  estimatedGstPayable: MoneyString;
+  registrations: GstContext[];
+  organisationConfigured: boolean;
+}
+
+export interface Organisation {
+  id: string;
+  legalName: string;
+  tradeName: string | null;
+  pan: string | null;
+  constitution: string | null;
+  addressLine1: string | null;
+  addressLine2: string | null;
+  city: string | null;
+  pincode: string | null;
+  stateCode: number;
+  email: string | null;
+  phone: string | null;
+  fyStartMonth: number;
+  booksStartDate: string;
+  roundToRupee: boolean;
+  rowVersion: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface Registration {
+  id: string;
+  organisationId: string;
+  gstin: string;
+  stateCode: number;
+  registrationType: string;
+  filingFrequency: "monthly" | "quarterly";
+  signatoryName: string | null;
+  effectiveFrom: string;
+  effectiveTo: string | null;
+  status: "active" | "cancelled" | "suspended";
+  rowVersion: number;
+  createdAt: string;
+  updatedAt: string | null;
+}
+
+export interface FinancialYearInfo {
+  code: string;
+  label: string;
+  startDate: string;
+  endDate: string;
+}
+
+export interface BusinessProfile {
+  organisation: Organisation | null;
+  registrations: Registration[];
+  currentFinancialYear: FinancialYearInfo;
+  nextFinancialYear: FinancialYearInfo;
+  accountCount: number;
+  hasPostings: boolean;
+}
+
+export interface Series {
+  id: string;
+  organisationId: string;
+  gstRegistrationId: string | null;
+  documentType: string;
+  financialYear: string;
+  prefix: string;
+  suffix: string;
+  padding: number;
+  nextNumber: number;
+  isDefault: boolean;
+  rowVersion: number;
+  createdAt: string;
+  updatedAt: string;
+  gstin: string | null;
+  nextPreview: string;
+  locked: boolean;
+}
+
+export interface Account {
+  id: string;
+  code: string;
+  name: string;
+  kind: "asset" | "liability" | "equity" | "income" | "expense";
+  systemRole: string | null;
+  isActive: boolean;
+}
+
+export interface AuditEvent {
+  id: string;
+  occurredAt: string;
+  actor: string;
+  action: string;
+  entityType: string;
+  entityId: string | null;
+  reason: string | null;
+  beforeJson: string | null;
+  afterJson: string | null;
+}
+
+export interface OrganisationInput {
+  legalName: string;
+  tradeName?: string;
+  pan?: string;
+  constitution: string;
+  addressLine1?: string;
+  addressLine2?: string;
+  city?: string;
+  pincode?: string;
+  stateCode: number;
+  email?: string;
+  phone?: string;
+  fyStartMonth: number;
+  booksStartDate: string;
+  roundToRupee: boolean;
+}
+
+export interface RegistrationInput {
+  gstin: string;
+  registrationType: string;
+  filingFrequency: string;
+  effectiveFrom: string;
+  signatoryName?: string;
+}
+
+export interface UpdateRegistrationInput {
+  registrationType: string;
+  filingFrequency: string;
+  effectiveFrom: string;
+  effectiveTo?: string;
+  signatoryName?: string;
+  status: string;
+}
+
+export interface SetupBusinessInput {
+  organisation: OrganisationInput;
+  registration?: RegistrationInput;
+  invoicePrefix?: string;
+}
+
+export interface SeriesInput {
+  gstRegistrationId?: string;
+  documentType: string;
+  financialYear: string;
+  prefix: string;
+  suffix: string;
+  padding: number;
+  nextNumber: number;
+  isDefault: boolean;
+}
+
+export type SeriesUpdateInput = Pick<SeriesInput, "prefix" | "suffix" | "padding" | "nextNumber" | "isDefault">;
+
+// ---------------------------------------------------------------------------
+// Masters (Phase 1.2)
+// ---------------------------------------------------------------------------
+
+export type PartyKind = "customer" | "supplier" | "both";
+export type PartyGstType = "regular" | "composition" | "unregistered" | "consumer" | "overseas" | "sez";
+
+export interface Party {
+  id: string;
+  organisationId: string;
+  kind: PartyKind;
+  name: string;
+  legalName: string | null;
+  gstType: PartyGstType;
+  gstin: string | null;
+  pan: string | null;
+  stateCode: number;
+  addressLine1: string | null;
+  addressLine2: string | null;
+  city: string | null;
+  pincode: string | null;
+  shippingSame: boolean;
+  shippingLine1: string | null;
+  shippingLine2: string | null;
+  shippingCity: string | null;
+  shippingPincode: string | null;
+  shippingStateCode: number | null;
+  contactPerson: string | null;
+  email: string | null;
+  phone: string | null;
+  paymentTermsDays: number | null;
+  creditLimitPaise: number | null;
+  /** Signed: positive = they owe us. */
+  openingBalancePaise: number;
+  openingEntryId: string | null;
+  notes: string | null;
+  isActive: boolean;
+  rowVersion: number;
+  createdAt: string;
+  updatedAt: string;
+  /** Current ledger balance in paise; positive = they owe us. */
+  balancePaise: number;
+}
+
+export interface PartyInput {
+  kind: PartyKind;
+  name: string;
+  legalName?: string;
+  gstType: PartyGstType;
+  gstin?: string;
+  pan?: string;
+  stateCode?: number;
+  addressLine1?: string;
+  addressLine2?: string;
+  city?: string;
+  pincode?: string;
+  shippingSame: boolean;
+  shippingLine1?: string;
+  shippingLine2?: string;
+  shippingCity?: string;
+  shippingPincode?: string;
+  shippingStateCode?: number;
+  contactPerson?: string;
+  email?: string;
+  phone?: string;
+  paymentTermsDays?: number;
+  creditLimit?: MoneyString;
+  openingBalance?: MoneyString;
+  openingBalanceSide?: "receivable" | "payable";
+  notes?: string;
+  isActive: boolean;
+}
+
+export type ItemKind = "goods" | "service";
+export type TaxCategory = "taxable" | "exempt" | "nil_rated" | "non_gst";
+
+export interface Item {
+  id: string;
+  organisationId: string;
+  kind: ItemKind;
+  name: string;
+  code: string | null;
+  description: string | null;
+  hsnSac: string | null;
+  unit: string;
+  taxCategory: TaxCategory;
+  gstRateBp: number;
+  cessRateBp: number;
+  salesPricePaise: number | null;
+  purchasePricePaise: number | null;
+  priceIncludesTax: boolean;
+  trackStock: boolean;
+  isActive: boolean;
+  rowVersion: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ItemInput {
+  kind: ItemKind;
+  name: string;
+  code?: string;
+  description?: string;
+  hsnSac?: string;
+  unit?: string;
+  taxCategory: TaxCategory;
+  /** Percent as a decimal string, e.g. "18". */
+  gstRate?: string;
+  cessRate?: string;
+  salesPrice?: MoneyString;
+  purchasePrice?: MoneyString;
+  priceIncludesTax: boolean;
+  trackStock: boolean;
+  isActive: boolean;
+}
+
+export interface ItemOptions {
+  units: { code: string; label: string }[];
+  gstRates: { basisPoints: number; legacy: boolean }[];
+}
+
+// ---------------------------------------------------------------------------
+// Import (Phase 1.2)
+// ---------------------------------------------------------------------------
+
+export type ImportKind = "parties" | "items";
+
+export interface ImportField {
+  key: string;
+  label: string;
+  required: boolean;
+  hint: string;
+}
+
+export interface ImportTable {
+  fileName: string;
+  headers: string[];
+  rows: string[][];
+}
+
+/** Field key → zero-based column index. */
+export type ImportMapping = Record<string, number>;
+
+export interface ParsedImport {
+  table: ImportTable;
+  fields: ImportField[];
+  mapping: ImportMapping;
+}
+
+export interface RowIssue {
+  /** Spreadsheet row number; the header is row 1. */
+  row: number;
+  label: string;
+  errors: { field: string; message: string }[];
+}
+
+export interface ImportPreview {
+  total: number;
+  valid: number;
+  issues: RowIssue[];
+}
+
+export interface ImportResult {
+  created: number;
+  skipped: RowIssue[];
+}
+
+export interface ImportTemplate {
+  fields: ImportField[];
+  fileName: string;
+  csv: string;
+}
+
+// ---------------------------------------------------------------------------
+// Sales (Phase 1.3)
+// ---------------------------------------------------------------------------
+
+export type SalesDocType = "tax_invoice" | "bill_of_supply" | "credit_note";
+export type SalesDisplayStatus = "draft" | "issued" | "overdue" | "part_paid" | "paid" | "cancelled";
+export type SupplyKind = "intra_state" | "intra_union_territory" | "inter_state";
+
+export interface SalesDocument {
+  id: string;
+  organisationId: string;
+  docType: SalesDocType;
+  status: "draft" | "issued" | "cancelled";
+  gstRegistrationId: string | null;
+  seriesId: string | null;
+  financialYear: string | null;
+  number: string | null;
+  docDate: string;
+  dueDate: string | null;
+  partyId: string;
+  partyName: string;
+  partyGstin: string | null;
+  partyGstType: PartyGstType;
+  partyAddress: string | null;
+  placeOfSupply: number;
+  supplierState: number;
+  supplyKind: SupplyKind;
+  zeroRated: boolean;
+  reverseCharge: boolean;
+  pricesIncludeTax: boolean;
+  originalDocumentId: string | null;
+  reason: string | null;
+  notes: string | null;
+  taxablePaise: number;
+  cgstPaise: number;
+  sgstPaise: number;
+  utgstPaise: number;
+  igstPaise: number;
+  cessPaise: number;
+  roundOffPaise: number;
+  totalPaise: number;
+  paidPaise: number;
+  journalEntryId: string | null;
+  cancelEntryId: string | null;
+  cancelReason: string | null;
+  rowVersion: number;
+  createdAt: string;
+  updatedAt: string;
+  issuedAt: string | null;
+  cancelledAt: string | null;
+}
+
+export interface SalesLine {
+  id: string;
+  documentId: string;
+  lineNo: number;
+  itemId: string | null;
+  description: string;
+  hsnSac: string | null;
+  unit: string | null;
+  quantity: string;
+  unitPricePaise: number;
+  discountPaise: number;
+  taxCategory: TaxCategory;
+  gstRateBp: number;
+  cessRateBp: number;
+  amountPaise: number;
+  taxablePaise: number;
+  cgstPaise: number;
+  sgstPaise: number;
+  utgstPaise: number;
+  igstPaise: number;
+  cessPaise: number;
+  totalPaise: number;
+}
+
+export interface SalesSummary extends SalesDocument {
+  displayStatus: SalesDisplayStatus;
+}
+
+export interface DocumentRef {
+  id: string;
+  docType: SalesDocType;
+  number: string | null;
+  docDate: string;
+  status: SalesDocument["status"];
+  totalPaise: number;
+}
+
+export interface SalesDocumentView extends SalesDocument {
+  displayStatus: SalesDisplayStatus;
+  lines: SalesLine[];
+  original: DocumentRef | null;
+  creditNotes: DocumentRef[];
+  creditedPaise: number;
+}
+
+export interface SalesLineInput {
+  itemId?: string;
+  description: string;
+  hsnSac?: string;
+  unit?: string;
+  quantity: string;
+  unitPrice: string;
+  discount?: string;
+  taxCategory: TaxCategory;
+  gstRate?: string;
+  cessRate?: string;
+}
+
+export interface SalesDocumentInput {
+  docType: SalesDocType;
+  partyId: string;
+  docDate: string;
+  dueDate?: string;
+  gstRegistrationId?: string;
+  placeOfSupply?: number;
+  zeroRated: boolean;
+  pricesIncludeTax: boolean;
+  originalDocumentId?: string;
+  reason?: string;
+  notes?: string;
+  lines: SalesLineInput[];
+}
+
+export interface LineCalc {
+  amountPaise: number;
+  taxablePaise: number;
+  cgstPaise: number;
+  sgstPaise: number;
+  utgstPaise: number;
+  igstPaise: number;
+  cessPaise: number;
+  totalPaise: number;
+}
+
+export interface TotalsCalc {
+  taxablePaise: number;
+  cgstPaise: number;
+  sgstPaise: number;
+  utgstPaise: number;
+  igstPaise: number;
+  cessPaise: number;
+  roundOffPaise: number;
+  totalPaise: number;
+}
+
+export interface SalesCalculation {
+  supplyKind: SupplyKind | null;
+  placeOfSupply: number | null;
+  supplierState: number | null;
+  lines: (LineCalc | null)[];
+  totals: TotalsCalc;
+  numberPreview: string | null;
+}
+
+// ---------------------------------------------------------------------------
+// Purchases (Phase 1.4)
+// ---------------------------------------------------------------------------
+
+export type PurchaseDocType = "bill" | "debit_note" | "expense";
+export type PurchaseStatus = "draft" | "unpaid" | "overdue" | "part_paid" | "paid" | "recorded" | "cancelled";
+export type PaymentMode = "credit" | "cash" | "bank";
+export type ItcStatus = "na" | "pending" | "eligible" | "ineligible" | "partial";
+
+export interface PurchaseDocument {
+  id: string;
+  organisationId: string;
+  docType: PurchaseDocType;
+  status: "draft" | "recorded" | "cancelled";
+  gstRegistrationId: string | null;
+  seriesId: string | null;
+  number: string | null;
+  financialYear: string | null;
+  supplierInvoiceNumber: string | null;
+  supplierInvoiceDate: string | null;
+  docDate: string;
+  dueDate: string | null;
+  partyId: string | null;
+  partyName: string | null;
+  partyGstin: string | null;
+  partyGstType: PartyGstType | null;
+  placeOfSupply: number;
+  supplierState: number;
+  supplyKind: SupplyKind;
+  reverseCharge: boolean;
+  pricesIncludeTax: boolean;
+  paymentMode: PaymentMode;
+  originalDocumentId: string | null;
+  reason: string | null;
+  notes: string | null;
+  taxablePaise: number;
+  cgstPaise: number;
+  sgstPaise: number;
+  utgstPaise: number;
+  igstPaise: number;
+  cessPaise: number;
+  roundOffPaise: number;
+  totalPaise: number;
+  paidPaise: number;
+  journalEntryId: string | null;
+  cancelEntryId: string | null;
+  cancelReason: string | null;
+  rowVersion: number;
+  createdAt: string;
+  updatedAt: string;
+  recordedAt: string | null;
+  cancelledAt: string | null;
+}
+
+export interface PurchaseLine {
+  id: string;
+  documentId: string;
+  lineNo: number;
+  itemId: string | null;
+  accountId: string;
+  description: string;
+  hsnSac: string | null;
+  unit: string | null;
+  quantity: string;
+  unitPricePaise: number;
+  discountPaise: number;
+  taxCategory: TaxCategory;
+  gstRateBp: number;
+  cessRateBp: number;
+  amountPaise: number;
+  taxablePaise: number;
+  cgstPaise: number;
+  sgstPaise: number;
+  utgstPaise: number;
+  igstPaise: number;
+  cessPaise: number;
+  totalPaise: number;
+  itcStatus: ItcStatus;
+  itcReason: string | null;
+  itcEligiblePaise: number;
+  itcReviewedAt: string | null;
+  itcReviewedBy: string | null;
+}
+
+export interface PurchaseSummary extends PurchaseDocument {
+  displayStatus: PurchaseStatus;
+  itcPendingLines: number;
+}
+
+export interface PurchaseRef {
+  id: string;
+  docType: PurchaseDocType;
+  number: string | null;
+  supplierInvoiceNumber: string | null;
+  docDate: string;
+  status: PurchaseDocument["status"];
+  totalPaise: number;
+}
+
+export interface Attachment {
+  id: string;
+  entityType: string;
+  entityId: string;
+  fileName: string;
+  contentType: string;
+  sizeBytes: number;
+  sha256: string;
+  uploadedAt: string;
+  uploadedBy: string;
+}
+
+export interface PurchaseDocumentView extends PurchaseDocument {
+  displayStatus: PurchaseStatus;
+  lines: PurchaseLine[];
+  original: PurchaseRef | null;
+  debitNotes: PurchaseRef[];
+  debitedPaise: number;
+  attachments: Attachment[];
+}
+
+export interface PurchaseLineInput {
+  itemId?: string;
+  accountId: string;
+  description: string;
+  hsnSac?: string;
+  unit?: string;
+  quantity: string;
+  unitPrice: string;
+  discount?: string;
+  taxCategory: TaxCategory;
+  gstRate?: string;
+  cessRate?: string;
+  itcStatus?: Exclude<ItcStatus, "na">;
+  itcReason?: string;
+  itcEligible?: string;
+}
+
+export interface PurchaseDocumentInput {
+  docType: PurchaseDocType;
+  partyId?: string;
+  supplierInvoiceNumber?: string;
+  supplierInvoiceDate?: string;
+  docDate: string;
+  dueDate?: string;
+  gstRegistrationId?: string;
+  paymentMode?: PaymentMode;
+  reverseCharge: boolean;
+  pricesIncludeTax: boolean;
+  originalDocumentId?: string;
+  reason?: string;
+  notes?: string;
+  lines: PurchaseLineInput[];
+}
+
+export interface PurchaseCalculation {
+  supplyKind: SupplyKind | null;
+  lines: (LineCalc | null)[];
+  totals: TotalsCalc;
+  reverseChargeTaxPaise: number;
+  numberPreview: string | null;
+}
+
+export interface AttachmentContent {
+  fileName: string;
+  contentType: string;
+  bytes: number[];
+}
+
+export interface ItcReviewInput {
+  status: Exclude<ItcStatus, "na">;
+  reason?: string;
+  eligible?: string;
+}
+
+/** Error shape produced by src-tauri/src/commands.rs. */
+export class ApiError extends Error {
+  readonly code: string;
+  readonly fields: Record<string, string>;
+
+  constructor(raw: { code?: string; message?: string; fields?: { field: string; message: string }[] }) {
+    super(raw.message ?? "Something went wrong.");
+    this.code = raw.code ?? "unknown";
+    this.fields = Object.fromEntries((raw.fields ?? []).map((f) => [f.field, f.message]));
+  }
+}
+
+export const runningInTauri = isTauri();
+
+/**
+ * Typed IPC wrapper. Outside the desktop shell (plain `pnpm dev` in a
+ * browser) an in-memory preview backend answers instead, so the UI can be
+ * developed standalone. It is never bundled into a code path the desktop uses.
+ */
+async function call<T>(command: string, args?: Record<string, unknown>): Promise<T> {
+  try {
+    if (!runningInTauri) return (await previewBackend(command, args)) as T;
+    return await invoke<T>(command, args);
+  } catch (e) {
+    if (e instanceof ApiError) throw e;
+    if (typeof e === "object" && e !== null) throw new ApiError(e as ConstructorParameters<typeof ApiError>[0]);
+    throw new ApiError({ message: String(e) });
+  }
+}
+
+export const api = {
+  health: () => call<HealthInfo>("app_health"),
+  dashboardSummary: (monthStart: string, monthEnd: string) =>
+    call<DashboardSummary>("dashboard_summary", { monthStart, monthEnd }),
+
+  businessProfile: () => call<BusinessProfile>("business_profile"),
+  setupBusiness: (input: SetupBusinessInput) => call<BusinessProfile>("setup_business", { input }),
+  updateOrganisation: (input: OrganisationInput, expectedVersion: number) =>
+    call<BusinessProfile>("update_organisation", { input, expectedVersion }),
+  addGstRegistration: (input: RegistrationInput) => call<BusinessProfile>("add_gst_registration", { input }),
+  updateGstRegistration: (id: string, input: UpdateRegistrationInput, expectedVersion: number) =>
+    call<BusinessProfile>("update_gst_registration", { id, input, expectedVersion }),
+
+  listAccounts: () => call<Account[]>("list_accounts"),
+  listSeries: () => call<Series[]>("list_series"),
+  createSeries: (input: SeriesInput) => call<Series[]>("create_series", { input }),
+  updateSeries: (id: string, input: SeriesUpdateInput, expectedVersion: number) =>
+    call<Series[]>("update_series", { id, input, expectedVersion }),
+
+  listAuditEvents: (limit = 100) => call<AuditEvent[]>("list_audit_events", { limit }),
+
+  listParties: () => call<Party[]>("list_parties"),
+  createParty: (input: PartyInput) => call<Party>("create_party", { input }),
+  updateParty: (id: string, input: PartyInput, expectedVersion: number) =>
+    call<Party>("update_party", { id, input, expectedVersion }),
+
+  itemOptions: () => call<ItemOptions>("item_options"),
+  listItems: () => call<Item[]>("list_items"),
+  createItem: (input: ItemInput) => call<Item>("create_item", { input }),
+  updateItem: (id: string, input: ItemInput, expectedVersion: number) =>
+    call<Item>("update_item", { id, input, expectedVersion }),
+
+  importTemplate: (kind: ImportKind) => call<ImportTemplate>("import_template", { kind }),
+  /** Bytes cross IPC as a number array; the core caps files at 5 MB. */
+  parseImport: (kind: ImportKind, fileName: string, bytes: Uint8Array) =>
+    call<ParsedImport>("parse_import", { kind, fileName, bytes: Array.from(bytes) }),
+  previewImport: (kind: ImportKind, table: ImportTable, mapping: ImportMapping) =>
+    call<ImportPreview>("preview_import", { kind, table, mapping }),
+  commitImport: (kind: ImportKind, table: ImportTable, mapping: ImportMapping) =>
+    call<ImportResult>("commit_import", { kind, table, mapping }),
+
+  listSales: () => call<SalesSummary[]>("list_sales"),
+  getSalesDocument: (id: string) => call<SalesDocumentView>("get_sales_document", { id }),
+  calculateSales: (input: SalesDocumentInput) => call<SalesCalculation>("calculate_sales", { input }),
+  saveSalesDraft: (id: string | null, input: SalesDocumentInput, expectedVersion?: number) =>
+    call<SalesDocumentView>("save_sales_draft", { id, input, expectedVersion }),
+  issueSalesDocument: (id: string | null, input: SalesDocumentInput, expectedVersion?: number) =>
+    call<SalesDocumentView>("issue_sales_document", { id, input, expectedVersion }),
+  cancelSalesDocument: (id: string, reason: string, expectedVersion: number) =>
+    call<SalesDocumentView>("cancel_sales_document", { id, reason, expectedVersion }),
+  deleteSalesDraft: (id: string, expectedVersion: number) => call<null>("delete_sales_draft", { id, expectedVersion }),
+
+  purchaseAccounts: () => call<Account[]>("purchase_accounts"),
+  listPurchases: () => call<PurchaseSummary[]>("list_purchases"),
+  getPurchase: (id: string) => call<PurchaseDocumentView>("get_purchase", { id }),
+  calculatePurchase: (input: PurchaseDocumentInput) => call<PurchaseCalculation>("calculate_purchase", { input }),
+  savePurchaseDraft: (id: string | null, input: PurchaseDocumentInput, expectedVersion?: number) =>
+    call<PurchaseDocumentView>("save_purchase_draft", { id, input, expectedVersion }),
+  recordPurchase: (id: string | null, input: PurchaseDocumentInput, expectedVersion?: number) =>
+    call<PurchaseDocumentView>("record_purchase", { id, input, expectedVersion }),
+  reviewItc: (documentId: string, lineId: string, input: ItcReviewInput, expectedVersion: number) =>
+    call<PurchaseDocumentView>("review_itc", { documentId, lineId, input, expectedVersion }),
+  cancelPurchase: (id: string, reason: string, expectedVersion: number) =>
+    call<PurchaseDocumentView>("cancel_purchase", { id, reason, expectedVersion }),
+  deletePurchaseDraft: (id: string, expectedVersion: number) => call<null>("delete_purchase_draft", { id, expectedVersion }),
+  /** Bytes cross IPC as a number array; the core caps attachments at 5 MB. */
+  addAttachment: (documentId: string, fileName: string, bytes: Uint8Array) =>
+    call<Attachment>("add_attachment", { documentId, fileName, bytes: Array.from(bytes) }),
+  attachmentContent: (id: string) => call<AttachmentContent>("attachment_content", { id }),
+  removeAttachment: (id: string) => call<null>("remove_attachment", { id }),
+};
+
+/** Query keys shared by readers and the mutations that invalidate them. */
+export const keys = {
+  profile: ["profile"] as const,
+  dashboard: ["dashboard"] as const,
+  series: ["series"] as const,
+  accounts: ["accounts"] as const,
+  audit: ["audit"] as const,
+  health: ["health"] as const,
+  parties: ["parties"] as const,
+  items: ["items"] as const,
+  itemOptions: ["itemOptions"] as const,
+  sales: ["sales"] as const,
+  salesDocument: (id: string) => ["sales", id] as const,
+  purchases: ["purchases"] as const,
+  purchase: (id: string) => ["purchases", id] as const,
+  purchaseAccounts: ["purchaseAccounts"] as const,
+};

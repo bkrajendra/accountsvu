@@ -1,0 +1,19 @@
+[package]
+name = "av-persistence"
+description = "SQLx repositories and embedded migrations (SQLite)"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+av-domain.workspace = true
+sqlx.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
+
+[lints]
+workspace = true

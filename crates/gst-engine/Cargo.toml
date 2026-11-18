@@ -1,0 +1,18 @@
+[package]
+name = "av-gst-engine"
+description = "GST tax calculation, rule versions and return workpapers"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+av-domain.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+rust_decimal.workspace = true
+
+[dev-dependencies]
+rust_decimal_macros.workspace = true
+
+[lints]
+workspace = true
