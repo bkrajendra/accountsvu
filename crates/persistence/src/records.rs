@@ -471,3 +471,140 @@ pub struct StatementLineRecord {
     pub matched_by: Option<String>,
     pub created_at: String,
 }
+
+// ---------------------------------------------------------------------------
+// Ledger and reports (Phase 1.6)
+// ---------------------------------------------------------------------------
+
+/// One account's movement: balance before the period, and debits/credits in it.
+#[derive(Clone, Debug, FromRow, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountTotalsRecord {
+    pub account_id: String,
+    pub code: String,
+    pub name: String,
+    pub kind: String,
+    pub system_role: Option<String>,
+    pub opening_paise: i64,
+    pub debit_paise: i64,
+    pub credit_paise: i64,
+}
+
+/// One journal line with its entry, for the journal register.
+#[derive(Clone, Debug, FromRow, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JournalRowRecord {
+    pub entry_id: String,
+    pub entry_date: String,
+    pub source_type: String,
+    pub source_id: Option<String>,
+    pub narration: Option<String>,
+    pub reverses_entry_id: Option<String>,
+    pub posted_at: String,
+    pub posted_by: Option<String>,
+    pub line_no: i64,
+    pub account_id: String,
+    pub account_code: String,
+    pub account_name: String,
+    pub debit_paise: i64,
+    pub credit_paise: i64,
+    pub party_name: Option<String>,
+}
+
+/// An invoice or bill with something outstanding, with its party, for ageing.
+#[derive(Clone, Debug, FromRow, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgeingDocRecord {
+    pub document_kind: String,
+    pub id: String,
+    pub party_id: String,
+    pub party_name: String,
+    pub number: Option<String>,
+    pub doc_date: String,
+    pub due_date: Option<String>,
+    pub total_paise: i64,
+    pub outstanding_paise: i64,
+}
+
+#[derive(Clone, Debug, FromRow, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BooksLockRecord {
+    pub organisation_id: String,
+    pub locked_until: String,
+    pub reason: Option<String>,
+    pub updated_at: String,
+    pub updated_by: String,
+}
+
+#[derive(Clone, Debug, FromRow, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FyCloseRecord {
+    pub id: String,
+    pub organisation_id: String,
+    pub financial_year: String,
+    pub start_date: String,
+    pub end_date: String,
+    pub status: String,
+    pub entry_id: Option<String>,
+    pub profit_paise: i64,
+    pub closed_at: String,
+    pub closed_by: String,
+    pub reopen_entry_id: Option<String>,
+    pub reopen_reason: Option<String>,
+    pub reopened_at: Option<String>,
+    pub reopened_by: Option<String>,
+}
+
+#[derive(Clone, Debug, FromRow, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LogoRecord {
+    pub organisation_id: String,
+    pub sha256: String,
+    pub file_name: String,
+    pub content_type: String,
+    pub size_bytes: i64,
+    pub updated_at: String,
+    pub updated_by: String,
+}
+
+#[derive(Clone, Debug, FromRow, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupLogRecord {
+    pub id: String,
+    pub organisation_id: String,
+    /// 'backup' or 'restore'.
+    pub kind: String,
+    pub happened_at: String,
+    pub file_name: String,
+    pub size_bytes: i64,
+    pub sha256: Option<String>,
+    pub actor: Option<String>,
+}
+
+/// What a database file contains and whether it is sound — used to check a
+/// backup before it replaces the live data.
+#[derive(Clone, Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DatabaseCheck {
+    /// "ok", or SQLite's first integrity problem.
+    pub integrity: String,
+    pub foreign_key_problems: i64,
+    pub schema_version: i64,
+    pub business_name: Option<String>,
+    pub parties: i64,
+    pub items: i64,
+    pub sales_documents: i64,
+    pub purchase_documents: i64,
+    pub vouchers: i64,
+    pub journal_entries: i64,
+    /// Journal entries whose debits and credits differ (must be 0).
+    pub unbalanced_entries: i64,
+    pub attachments: i64,
+    pub last_entry_date: Option<String>,
+}
+
+impl DatabaseCheck {
+    pub fn is_sound(&self) -> bool {
+        self.integrity == "ok" && self.foreign_key_problems == 0 && self.unbalanced_entries == 0
+    }
+}

@@ -56,7 +56,7 @@ async fn fresh_install_health_and_dashboard() {
     let core = core().await;
     let h = core.health().await.unwrap();
     assert!(!h.organisation_configured);
-    assert_eq!(h.schema_version, 6);
+    assert_eq!(h.schema_version, 8);
     let d = core
         .dashboard_summary(&ctx(), "2026-11-01", "2026-11-30")
         .await
@@ -2915,4 +2915,599 @@ async fn operators_record_receipts_but_cannot_cancel_them() {
         .await
         .unwrap_err();
     assert_eq!(err.code(), "forbidden");
+}
+
+// ---------------------------------------------------------------------------
+// Phase 1.6: ledger and reports
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn reports_balance_and_drill_down() {
+    let b = books().await;
+    let core = &b.core;
+    let bank = money_account(core, "bank").await;
+    // Sale ₹1,000 + 18% intra-state; purchase ₹500 + 18%; ₹1,180 received.
+    let inv = core
+        .issue_sales_document(
+            &ctx(),
+            None,
+            invoice(
+                &b.customer,
+                "2026-11-02",
+                vec![line(None, "1", "1000", "18")],
+            ),
+            None,
+        )
+        .await
+        .unwrap();
+    core.record_purchase(
+        &ctx(),
+        None,
+        bill(
+            &b.supplier,
+            "sc/1",
+            vec![pline(&b.purchases_acc, "500", "18", Some("eligible"))],
+        ),
+        None,
+    )
+    .await
+    .unwrap();
+    core.create_voucher(
+        &ctx(),
+        &VoucherInput {
+            allocations: vec![alloc(&inv.document.id, "1180")],
+            ..receipt(&b.customer, &bank, "2026-11-10", "1180")
+        },
+    )
+    .await
+    .unwrap();
+
+    let tb = core.trial_balance(&ctx(), None, None).await.unwrap();
+    assert!(tb.balanced);
+    assert_eq!(tb.debit_paise, tb.credit_paise);
+    let sales_row = tb
+        .rows
+        .iter()
+        .find(|r| r.system_role.as_deref() == Some("sales"))
+        .unwrap();
+    assert_eq!(sales_row.closing_paise, -100_000);
+
+    let pl = core
+        .profit_and_loss(&ctx(), "2026-04-01", "2027-03-31")
+        .await
+        .unwrap();
+    assert_eq!(pl.sections[0].total_paise, 100_000);
+    assert_eq!(pl.sections[1].total_paise, 50_000);
+    assert_eq!(pl.gross_profit_paise, 50_000);
+    assert_eq!(pl.net_profit_paise, 50_000);
+
+    let bs = core.balance_sheet(&ctx(), "2026-11-17").await.unwrap();
+    assert!(bs.balanced, "{bs:?}");
+    assert_eq!(bs.profit_paise, 50_000);
+
+    // Drill down: the sales ledger shows the invoice; the bank ledger the receipt.
+    let gl = core
+        .general_ledger(&ctx(), &sales_row.account_id, Some("2026-11-01"), None)
+        .await
+        .unwrap();
+    assert_eq!(gl.lines.len(), 1);
+    assert_eq!(gl.lines[0].line.source_type, "sales_invoice");
+    assert_eq!(
+        gl.lines[0].line.source_id.as_deref(),
+        Some(inv.document.id.as_str())
+    );
+    assert_eq!(gl.closing_paise, -100_000);
+
+    let pled = core
+        .party_ledger(&ctx(), &b.customer, None, None)
+        .await
+        .unwrap();
+    assert_eq!(pled.lines.len(), 2);
+    assert_eq!(pled.closing_paise, 0);
+
+    let j = core.journal_register(&ctx(), None, None).await.unwrap();
+    assert_eq!(j.entries.len(), 3);
+    assert!(!j.truncated);
+    assert!(
+        j.entries
+            .iter()
+            .all(|e| e.lines.iter().map(|l| l.debit_paise).sum::<i64>()
+                == e.lines.iter().map(|l| l.credit_paise).sum::<i64>())
+    );
+
+    // A narrower period: the trial balance carries an opening column.
+    let tb = core
+        .trial_balance(&ctx(), Some("2026-11-05"), Some("2026-11-30"))
+        .await
+        .unwrap();
+    assert!(tb.balanced);
+    assert_eq!(tb.opening_debit_paise, tb.opening_credit_paise);
+}
+
+#[tokio::test]
+async fn ageing_buckets_documents_and_opening_balances() {
+    let s = shop().await;
+    let core = &s.core;
+    // Ravi: 15-day terms. One invoice 70 days old (55 overdue), one recent.
+    core.issue_sales_document(
+        &ctx(),
+        None,
+        invoice(
+            &s.customer,
+            "2026-09-08",
+            vec![line(None, "1", "1000", "18")],
+        ),
+        None,
+    )
+    .await
+    .unwrap();
+    core.issue_sales_document(
+        &ctx(),
+        None,
+        invoice(
+            &s.customer,
+            "2026-11-10",
+            vec![line(None, "1", "500", "18")],
+        ),
+        None,
+    )
+    .await
+    .unwrap();
+    // A customer with only an opening balance.
+    core.create_party(
+        &ctx(),
+        PartyInput {
+            opening_balance: Some("300".into()),
+            ..customer("Old Customer")
+        },
+    )
+    .await
+    .unwrap();
+    let a = core
+        .ageing(&ctx(), "receivables", "2026-11-17")
+        .await
+        .unwrap();
+    let ravi = a
+        .parties
+        .iter()
+        .find(|p| p.party_name == "Ravi Stores")
+        .unwrap();
+    assert_eq!(ravi.buckets, [59_000, 0, 118_000, 0, 0]);
+    assert_eq!(ravi.unallocated_paise, 0);
+    assert_eq!(ravi.documents.len(), 2);
+    let old = a
+        .parties
+        .iter()
+        .find(|p| p.party_name == "Old Customer")
+        .unwrap();
+    assert_eq!(old.unallocated_paise, 30_000);
+    assert_eq!(a.total_paise, 59_000 + 118_000 + 30_000);
+    assert!(core.ageing(&ctx(), "x", "2026-11-17").await.is_err());
+    let p = core.ageing(&ctx(), "payables", "2026-11-17").await.unwrap();
+    assert!(p.parties.is_empty());
+}
+
+#[tokio::test]
+async fn locked_periods_refuse_postings_and_reopen_with_a_reason() {
+    let s = shop().await;
+    let core = &s.core;
+    let c = core
+        .set_books_lock(&ctx(), Some("2026-11-05"), None)
+        .await
+        .unwrap();
+    assert_eq!(c.lock.unwrap().locked_until, "2026-11-05");
+    let err = core
+        .issue_sales_document(
+            &ctx(),
+            None,
+            invoice(
+                &s.customer,
+                "2026-11-03",
+                vec![line(None, "1", "100", "18")],
+            ),
+            None,
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), "conflict");
+    // After the lock is fine.
+    core.issue_sales_document(
+        &ctx(),
+        None,
+        invoice(
+            &s.customer,
+            "2026-11-06",
+            vec![line(None, "1", "100", "18")],
+        ),
+        None,
+    )
+    .await
+    .unwrap();
+    // Future dates can't be locked; moving back needs a reason; only owners.
+    assert!(
+        core.set_books_lock(&ctx(), Some("2026-12-31"), None)
+            .await
+            .is_err()
+    );
+    let err = core
+        .set_books_lock(&ctx(), Some("2026-10-31"), None)
+        .await
+        .unwrap_err();
+    assert_eq!(fields(&err), vec!["reason"]);
+    let accountant = RequestContext {
+        actor: user("acc", Role::Accountant),
+        ..ctx()
+    };
+    assert_eq!(
+        core.set_books_lock(&accountant, Some("2026-11-10"), None)
+            .await
+            .unwrap_err()
+            .code(),
+        "forbidden"
+    );
+    let c = core
+        .set_books_lock(&ctx(), None, Some("late supplier bill"))
+        .await
+        .unwrap();
+    assert!(c.lock.is_none());
+    core.issue_sales_document(
+        &ctx(),
+        None,
+        invoice(
+            &s.customer,
+            "2026-11-03",
+            vec![line(None, "1", "100", "18")],
+        ),
+        None,
+    )
+    .await
+    .unwrap_err(); // out of order within the series — but not because of the lock
+}
+
+#[tokio::test]
+async fn closing_a_year_moves_profit_and_locks_it() {
+    let core = core().await;
+    core.setup_business(
+        &ctx(),
+        SetupBusinessInput {
+            organisation: OrganisationInput {
+                books_start_date: "2025-04-01".into(),
+                ..org_input()
+            },
+            registration: Some(reg_input(GSTIN_MH)),
+            invoice_prefix: None,
+        },
+    )
+    .await
+    .unwrap();
+    let cash = money_account(&core, "cash").await;
+    let other_income = core
+        .voucher_accounts(&ctx())
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|a| a.system_role.as_deref() == Some("other_income"))
+        .unwrap();
+    core.create_voucher(
+        &ctx(),
+        &VoucherInput {
+            voucher_type: "receipt".into(),
+            voucher_date: "2026-01-10".into(),
+            money_account_id: cash.clone(),
+            counter_account_id: Some(other_income.id.clone()),
+            amount: "1000".into(),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    let ctl = core.books_control(&ctx()).await.unwrap();
+    assert_eq!(ctl.years.len(), 2);
+    assert_eq!(ctl.years[1].year.code, "2025-26");
+    assert!(ctl.years[1].ended);
+    assert!(!ctl.years[0].ended);
+    // The running year can't close.
+    assert_eq!(
+        core.close_financial_year(&ctx(), "2026-27")
+            .await
+            .unwrap_err()
+            .code(),
+        "conflict"
+    );
+    let ctl = core.close_financial_year(&ctx(), "2025-26").await.unwrap();
+    assert_eq!(ctl.years[1].status, "closed");
+    assert_eq!(ctl.years[1].close.as_ref().unwrap().profit_paise, 100_000);
+    assert_eq!(ctl.lock.as_ref().unwrap().locked_until, "2026-03-31");
+
+    // P&L of the closed year still shows its income; the balance sheet shows
+    // it as retained earnings, not as current profit.
+    let pl = core
+        .profit_and_loss(&ctx(), "2025-04-01", "2026-03-31")
+        .await
+        .unwrap();
+    assert_eq!(pl.net_profit_paise, 100_000);
+    let bs = core.balance_sheet(&ctx(), "2026-03-31").await.unwrap();
+    assert!(bs.balanced);
+    assert_eq!(bs.profit_paise, 0);
+    assert_eq!(
+        bs.equity
+            .lines
+            .iter()
+            .find(|l| l.name == "Retained earnings")
+            .unwrap()
+            .amount_paise,
+        100_000
+    );
+    // Locked: nothing can be posted into the closed year, nor unlocked past it.
+    let err = core
+        .create_voucher(
+            &ctx(),
+            &VoucherInput {
+                voucher_type: "receipt".into(),
+                voucher_date: "2026-02-01".into(),
+                money_account_id: cash.clone(),
+                counter_account_id: Some(other_income.id.clone()),
+                amount: "1".into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), "conflict");
+    assert!(core.set_books_lock(&ctx(), None, Some("x")).await.is_err());
+
+    // Reopen: needs a reason; reverses the close and unlocks the year.
+    assert_eq!(
+        fields(
+            &core
+                .reopen_financial_year(&ctx(), "2025-26", " ")
+                .await
+                .unwrap_err()
+        ),
+        vec!["reason"]
+    );
+    let ctl = core
+        .reopen_financial_year(&ctx(), "2025-26", "audit adjustment")
+        .await
+        .unwrap();
+    assert_eq!(ctl.years[1].status, "open");
+    assert!(ctl.lock.is_none());
+    let bs = core.balance_sheet(&ctx(), "2026-03-31").await.unwrap();
+    assert!(bs.balanced);
+    assert_eq!(bs.profit_paise, 100_000);
+    // And it can be closed again.
+    core.close_financial_year(&ctx(), "2025-26").await.unwrap();
+}
+
+#[tokio::test]
+async fn logo_is_stored_and_checked() {
+    let core = core().await;
+    set_up(&core).await;
+    assert!(core.logo(&ctx()).await.unwrap().is_none());
+    let png = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDRfake";
+    let l = core.set_logo(&ctx(), "logo.png", png).await.unwrap();
+    assert_eq!(l.content_type, "image/png");
+    let got = core.logo(&ctx()).await.unwrap().unwrap();
+    assert_eq!(got.bytes, png.to_vec());
+    assert!(core.set_logo(&ctx(), "x.gif", b"GIF89a....").await.is_err());
+    assert!(
+        core.set_logo(&ctx(), "x.svg", b"<svg onload=\"alert(1)\"></svg>")
+            .await
+            .is_err()
+    );
+    let accountant = RequestContext {
+        actor: user("acc", Role::Accountant),
+        ..ctx()
+    };
+    assert_eq!(
+        core.set_logo(&accountant, "logo.png", png)
+            .await
+            .unwrap_err()
+            .code(),
+        "forbidden"
+    );
+    core.remove_logo(&ctx()).await.unwrap();
+    assert!(core.logo(&ctx()).await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn invoices_print_to_pdf_with_the_logo() {
+    let s = shop().await;
+    let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40"><rect width="40" height="40" rx="9" fill="#0A84FF"/></svg>"##;
+    s.core.set_logo(&ctx(), "logo.svg", svg).await.unwrap();
+    let input = invoice(
+        &s.customer,
+        "2026-11-10",
+        vec![
+            line(Some(&s.laptop), "2", "1000", "18"),
+            line(None, "1", "499.50", "18"),
+        ],
+    );
+    let draft = s
+        .core
+        .save_sales_draft(&ctx(), None, input.clone(), None)
+        .await
+        .unwrap();
+    let pdf = s
+        .core
+        .sales_document_pdf(&ctx(), &draft.document.id)
+        .await
+        .unwrap();
+    assert_eq!(pdf.file_name, "Tax-invoice-draft.pdf");
+    assert!(pdf.bytes.starts_with(b"%PDF-"));
+
+    let v = s
+        .core
+        .issue_sales_document(
+            &ctx(),
+            Some(&draft.document.id),
+            input,
+            Some(draft.document.row_version),
+        )
+        .await
+        .unwrap();
+    let pdf = s
+        .core
+        .sales_document_pdf(&ctx(), &v.document.id)
+        .await
+        .unwrap();
+    assert_eq!(pdf.file_name, "INV-26-27-0001.pdf");
+    assert_eq!(pdf.size_bytes, pdf.bytes.len());
+    // Same document, same bytes.
+    let again = s
+        .core
+        .sales_document_pdf(&ctx(), &v.document.id)
+        .await
+        .unwrap();
+    assert_eq!(pdf.bytes, again.bytes);
+    assert_eq!(
+        s.core
+            .sales_document_pdf(&ctx(), "missing")
+            .await
+            .unwrap_err()
+            .code(),
+        "not_found"
+    );
+}
+
+#[tokio::test]
+async fn backup_restores_on_a_clean_install_and_checks_the_books() {
+    use crate::crypto::TEST_KDF;
+    use av_persistence::sqlite::{apply_pending_restore, pending_restore_path};
+
+    let dir = std::env::temp_dir().join(format!("accountsvu-restore-{}", av_domain::new_id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    // Backups snapshot the database file, so this business lives in one.
+    let live = AppCore::open_on(&dir.join("live.sqlite3"), today())
+        .await
+        .unwrap();
+    set_up(&live).await;
+    let customer = live
+        .create_party(&ctx(), customer("Ravi Stores"))
+        .await
+        .unwrap()
+        .party
+        .id;
+    let laptop = live.create_item(&ctx(), goods("Laptop")).await.unwrap().id;
+    let s = Shop {
+        core: live,
+        customer: customer.clone(),
+        karnataka: customer,
+        laptop,
+    };
+    let issued = s
+        .core
+        .issue_sales_document(
+            &ctx(),
+            None,
+            invoice(
+                &s.customer,
+                "2026-11-10",
+                vec![line(Some(&s.laptop), "2", "1000", "18")],
+            ),
+            None,
+        )
+        .await
+        .unwrap();
+    let status = s.core.backup_status(&ctx()).await.unwrap();
+    assert!(status.last_backup.is_none() && status.due);
+
+    // Only the owner backs up, and the passphrase has a minimum length.
+    let operator = RequestContext {
+        actor: user("op", Role::Operator),
+        ..ctx()
+    };
+    assert_eq!(
+        s.core
+            .create_backup_with(&operator, "long enough", TEST_KDF)
+            .await
+            .unwrap_err()
+            .code(),
+        "forbidden"
+    );
+    let short = s
+        .core
+        .create_backup_with(&ctx(), "short", TEST_KDF)
+        .await
+        .unwrap_err();
+    assert_eq!(fields(&short), vec!["passphrase"]);
+
+    let backup = s
+        .core
+        .create_backup_with(&ctx(), "correct horse", TEST_KDF)
+        .await
+        .unwrap();
+    assert!(backup.file_name.starts_with("Umang-") && backup.file_name.ends_with(".avbackup"));
+    assert_eq!(backup.header.business_name, "Umang");
+    assert_eq!(backup.header.schema_version, 8);
+    let status = s
+        .core
+        .record_backup(&ctx(), &backup.file_name, &backup.bytes)
+        .await
+        .unwrap();
+    assert_eq!(status.days_since_backup, Some(0));
+    assert!(!status.due);
+
+    // A clean install: nothing set up yet, so restoring needs no owner.
+    let staging = dir.join("restore-staging.sqlite3");
+    let fresh = core().await;
+    let wrong = fresh
+        .prepare_restore(&ctx(), &backup.bytes, "wrong horse", &staging)
+        .await
+        .unwrap_err();
+    assert_eq!(fields(&wrong), vec!["passphrase"]);
+    assert!(!staging.exists());
+    let check = fresh
+        .prepare_restore(&ctx(), &backup.bytes, "correct horse", &staging)
+        .await
+        .unwrap();
+    assert!(check.check.is_sound());
+    assert_eq!(check.check.business_name.as_deref(), Some("Umang"));
+    assert_eq!(check.check.sales_documents, 1);
+    assert_eq!(check.check.parties, 1);
+    assert!(check.check.journal_entries >= 1);
+
+    // The host swaps it in before opening the database.
+    let db = dir.join("accountsvu.sqlite3");
+    std::fs::rename(&staging, pending_restore_path(&db)).unwrap();
+    assert_eq!(apply_pending_restore(&db, "20261119").unwrap(), None);
+    let restored = AppCore::open(&db).await.unwrap();
+    restored.record_restore(&ctx(), None).await.unwrap();
+    let doc = restored
+        .get_sales_document(&ctx(), &issued.document.id)
+        .await
+        .unwrap();
+    assert_eq!(doc.document.number.as_deref(), Some("INV/26-27/0001"));
+    let tb = restored
+        .trial_balance(&ctx(), Some("2026-04-01"), Some("2027-03-31"))
+        .await
+        .unwrap();
+    assert!(tb.balanced);
+    let st = restored.backup_status(&ctx()).await.unwrap();
+    assert!(st.last_restore.is_some());
+    restored.close().await;
+
+    // A second restore keeps the data it replaces.
+    std::fs::write(pending_restore_path(&db), b"placeholder").unwrap();
+    let kept = apply_pending_restore(&db, "20261120").unwrap().unwrap();
+    assert!(
+        kept.file_name()
+            .unwrap()
+            .to_string_lossy()
+            .contains("before-restore-20261120")
+    );
+    assert_eq!(std::fs::read(&db).unwrap(), b"placeholder");
+
+    // Once a business exists, only the owner may restore over it.
+    assert_eq!(
+        s.core
+            .prepare_restore(&operator, &backup.bytes, "correct horse", &staging)
+            .await
+            .unwrap_err()
+            .code(),
+        "forbidden"
+    );
+    s.core.close().await;
+    let _ = std::fs::remove_dir_all(&dir);
 }

@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { ArrowLeftRight, BadgeCheck, Building2, Landmark, Scale, FileDigit, History, ListTree, Package, Paperclip, Receipt, ShoppingBag, Upload, Users, type LucideIcon } from "lucide-react";
+import { ArrowLeftRight, BadgeCheck, HardDriveDownload, Building2, Landmark, Scale, FileDigit, History, ListTree, Package, Paperclip, Receipt, ShoppingBag, Upload, Users, type LucideIcon } from "lucide-react";
 import { api, keys, type AuditEvent } from "../../lib/api";
 import { Card } from "../../components/ui";
 import { documentTypeLabel } from "../../lib/gst";
@@ -22,9 +22,13 @@ const ENTITY: Record<string, { label: string; icon: LucideIcon }> = {
   bank_statement: { label: "Bank statement", icon: Upload },
   bank_statement_line: { label: "Statement line", icon: Landmark },
   account: { label: "Ledger account", icon: Scale },
+  books_lock: { label: "Period lock", icon: Scale },
+  financial_year: { label: "Financial year", icon: Scale },
+  organisation_logo: { label: "Logo", icon: Building2 },
+  backup: { label: "Backup", icon: HardDriveDownload },
 };
 
-const VERB: Record<string, string> = { create: "created", update: "updated", seed: "created", run: "completed", issue: "issued", cancel: "cancelled", delete: "deleted", record: "recorded", itc_review: "reviewed", receipt: "recorded", payment: "recorded", match: "matched", unmatch: "unmatched", ignore: "ignored", import: "imported", undo_import: "import undone", opening_balance: "opening balance set" };
+const VERB: Record<string, string> = { create: "created", update: "updated", seed: "created", run: "completed", issue: "issued", cancel: "cancelled", delete: "deleted", record: "recorded", itc_review: "reviewed", receipt: "recorded", payment: "recorded", match: "matched", unmatch: "unmatched", ignore: "ignored", import: "imported", undo_import: "import undone", lock: "updated", reopen: "reopened", close: "closed", remove: "removed", restore: "restored", opening_balance: "opening balance set" };
 
 /** Field names that changed between the before/after snapshots. */
 function changedFields(e: AuditEvent): string[] {

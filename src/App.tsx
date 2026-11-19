@@ -19,8 +19,12 @@ import { VoucherEditor } from "./pages/banking/VoucherEditor";
 import { VoucherDocument } from "./pages/banking/VoucherDocument";
 import { MoneyBook } from "./pages/banking/MoneyBook";
 import { Reconcile } from "./pages/banking/Reconcile";
+import { Reports } from "./pages/reports/Reports";
+import { BalanceSheetPage, ProfitAndLossPage, TrialBalancePage } from "./pages/reports/Statements";
+import { AgeingPage, GeneralLedgerPage, JournalPage, PartyLedgerPage } from "./pages/reports/Ledgers";
 import { Setup } from "./pages/Setup";
 import { ToastProvider } from "./components/Toast";
+import { SessionGate } from "./lib/session";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -52,8 +56,18 @@ const router = createHashRouter([
       { path: "banking/vouchers/:id", element: <VoucherDocument /> },
       { path: "banking/accounts/:id", element: <MoneyBook /> },
       { path: "banking/accounts/:id/reconcile", element: <Reconcile /> },
+      { path: "reports", element: <Reports /> },
+      { path: "reports/trial-balance", element: <TrialBalancePage /> },
+      { path: "reports/profit-and-loss", element: <ProfitAndLossPage /> },
+      { path: "reports/balance-sheet", element: <BalanceSheetPage /> },
+      { path: "reports/ledger", element: <GeneralLedgerPage /> },
+      { path: "reports/ledger/:id", element: <GeneralLedgerPage /> },
+      { path: "reports/party", element: <PartyLedgerPage /> },
+      { path: "reports/party/:id", element: <PartyLedgerPage /> },
+      { path: "reports/journal", element: <JournalPage /> },
+      { path: "reports/ageing/:kind", element: <AgeingPage /> },
       ...primaryNav
-        .filter((n) => !["/", "/sales", "/purchases", "/parties", "/items", "/banking"].includes(n.path))
+        .filter((n) => !["/", "/sales", "/purchases", "/parties", "/items", "/banking", "/reports"].includes(n.path))
         .map((n) => ({ path: n.path.slice(1), element: <Placeholder item={n} /> })),
       { path: "settings", element: <Settings /> },
     ],
@@ -65,7 +79,9 @@ export default function App() {
     <ThemeProvider>
       <QueryClientProvider client={queryClient}>
         <ToastProvider>
-          <RouterProvider router={router} />
+          <SessionGate>
+            <RouterProvider router={router} />
+          </SessionGate>
         </ToastProvider>
       </QueryClientProvider>
     </ThemeProvider>

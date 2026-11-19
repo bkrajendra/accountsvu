@@ -72,6 +72,12 @@ impl SqliteStore {
     pub fn pool(&self) -> &SqlitePool {
         &self.pool
     }
+
+    /// Close every connection (checkpointing the WAL) so the file can be
+    /// moved or replaced.
+    pub async fn close(&self) {
+        self.pool.close().await;
+    }
 }
 
 impl Store for SqliteStore {
@@ -91,6 +97,10 @@ impl Store for SqliteStore {
                 .fetch_one(&self.pool)
                 .await?;
         Ok(v.unwrap_or(0))
+    }
+
+    async fn snapshot(&self, dest: &Path) -> DbResult<()> {
+        backup::vacuum_into(&self.pool, dest).await
     }
 }
 
@@ -630,9 +640,13 @@ impl LedgerQueries for SqliteUow {
     }
 }
 
+mod backup;
 mod banking;
 mod masters;
 mod purchases;
+mod reports;
+
+pub use backup::{apply_pending_restore, inspect_database, pending_restore_path};
 mod sales;
 
 #[cfg(test)]

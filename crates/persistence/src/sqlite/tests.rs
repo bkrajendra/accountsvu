@@ -36,7 +36,7 @@ fn series(id: &str, org: &str, doc: &str, prefix: &str) -> SeriesRecord {
 #[tokio::test]
 async fn migrates_and_reports_version() {
     let store = store_with_orgs(&[]).await;
-    assert_eq!(store.schema_version().await.unwrap(), 6);
+    assert_eq!(store.schema_version().await.unwrap(), 8);
     let mut u = store.begin().await.unwrap();
     assert_eq!(u.organisation_count().await.unwrap(), 0);
     assert_eq!(
@@ -231,4 +231,44 @@ async fn recorded_purchases_are_frozen_except_itc_review() {
             assert!(r.is_err(), "should be refused: {sql}");
         }
     }
+}
+
+#[tokio::test]
+async fn snapshot_writes_a_checkable_copy() {
+    let dir = std::env::temp_dir().join(format!("av-snap-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let store = SqliteStore::open(&dir.join("live.sqlite3")).await.unwrap();
+    let dest = dir.join("copy.sqlite3");
+    let _ = std::fs::remove_file(&dest);
+    store.snapshot(&dest).await.unwrap();
+    assert!(dest.exists(), "snapshot file missing at {}", dest.display());
+    let check = crate::sqlite::inspect_database(&dest).await.unwrap();
+    assert!(check.is_sound());
+    assert_eq!(check.schema_version, 8);
+    assert!(store.snapshot(&dest).await.is_err(), "never overwrites");
+    let memory = SqliteStore::open_in_memory().await.unwrap();
+    assert!(memory.snapshot(&dir.join("mem.sqlite3")).await.is_err());
+    drop(store);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn closing_releases_the_file() {
+    let dir = std::env::temp_dir().join(format!("av-close-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let path = dir.join("db.sqlite3");
+    let store = SqliteStore::open(&path).await.unwrap();
+    store.schema_version().await.unwrap();
+    store.close().await;
+    let moved = dir.join("moved.sqlite3");
+    let mut ok = false;
+    for i in 0..40 {
+        if std::fs::rename(&path, &moved).is_ok() {
+            ok = i < 40;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    assert!(ok);
+    let _ = std::fs::remove_dir_all(&dir);
 }

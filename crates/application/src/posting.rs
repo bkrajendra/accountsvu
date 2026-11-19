@@ -81,6 +81,15 @@ pub(crate) async fn post(
     p: Posting<'_>,
     now: &str,
 ) -> AppResult<String> {
+    // A locked period takes no postings (the database enforces it too).
+    if let Some(until) = uow.books_locked_until(p.org_id).await?
+        && p.entry_date <= until.as_str()
+    {
+        return Err(AppError::Conflict(format!(
+            "The books are locked up to {until}. Reopen the period in Settings to post on {}.",
+            p.entry_date
+        )));
+    }
     let mut p = p;
     p.lines
         .retain(|l| l.debit_paise != 0 || l.credit_paise != 0);

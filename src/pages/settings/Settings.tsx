@@ -7,12 +7,16 @@ import { NumberingTab } from "./NumberingTab";
 import { AccountsTab } from "./AccountsTab";
 import { ActivityTab } from "./ActivityTab";
 import { GeneralTab } from "./GeneralTab";
+import { PeriodsTab } from "./PeriodsTab";
+import { SecurityTab } from "./SecurityTab";
 
 const TABS = [
   { id: "business", label: "Business", el: <BusinessTab /> },
   { id: "gst", label: "GST registrations", el: <GstTab /> },
   { id: "numbering", label: "Numbering", el: <NumberingTab /> },
   { id: "accounts", label: "Chart of accounts", el: <AccountsTab /> },
+  { id: "periods", label: "Books & periods", el: <PeriodsTab /> },
+  { id: "security", label: "Backup & security", el: <SecurityTab /> },
   { id: "activity", label: "Activity log", el: <ActivityTab /> },
   { id: "general", label: "Appearance & about", el: <GeneralTab /> },
 ] as const;

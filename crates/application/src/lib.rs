@@ -3,14 +3,19 @@
 //! the persistence *traits*, never on a database engine (D20), and take a
 //! [`RequestContext`] saying who is acting on which organisation.
 
+pub mod backup;
 pub mod banking;
 mod context;
+pub mod crypto;
+pub mod documents;
 mod error;
 pub mod import;
 pub mod masters;
 mod posting;
 pub mod purchases;
+pub mod reports;
 pub mod sales;
+pub mod security;
 pub mod setup;
 
 pub use banking::{
@@ -95,6 +100,22 @@ impl AppCore<SqliteStore> {
     /// Personal mode: open the local SQLite database.
     pub async fn open(db_path: &Path) -> AppResult<Self> {
         Ok(Self::with_store(SqliteStore::open(db_path).await?))
+    }
+
+    /// File-backed core with a fixed "today", for tests that need a real file
+    /// (backups snapshot the database file).
+    #[doc(hidden)]
+    pub async fn open_on(db_path: &Path, today: NaiveDate) -> AppResult<Self> {
+        Ok(AppCore {
+            store: SqliteStore::open(db_path).await?,
+            today: Arc::new(move || today),
+        })
+    }
+
+    /// Close the database; the core can't be used afterwards. Called before a
+    /// restart so a pending restore can replace the file.
+    pub async fn close(&self) {
+        self.store.close().await;
     }
 
     pub async fn in_memory() -> AppResult<Self> {

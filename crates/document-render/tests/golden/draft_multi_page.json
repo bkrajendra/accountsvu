@@ -1,0 +1,682 @@
+{
+  "title": "Tax invoice",
+  "number": "Draft",
+  "watermark": "DRAFT",
+  "date": "19 Nov 2026",
+  "due": "19 Dec 2026",
+  "seller": {
+    "name": "Khope Traders",
+    "subtitle": "Khope Traders Private Limited",
+    "lines": [
+      "12 MG Road, Kothrud",
+      "Pune 411038, Maharashtra",
+      "GSTIN 27AAPFU0939F1ZV",
+      "accounts@khope.example · 98200 00000"
+    ]
+  },
+  "buyer": {
+    "name": "Sahyadri Stores",
+    "subtitle": null,
+    "lines": [
+      "Shop 4, Station Road",
+      "Nashik 422001",
+      "GSTIN 27ABCDE1234F1Z5"
+    ]
+  },
+  "place": "Maharashtra (27)",
+  "supply": "Within the state · CGST + SGST",
+  "flags": [
+    "Tax payable on reverse charge: No"
+  ],
+  "against": null,
+  "reason": null,
+  "notes": null,
+  "lines": [
+    {
+      "no": "1",
+      "description": "Spare part assortment, lot 1",
+      "discount": null,
+      "hsn": "84879000",
+      "qty": "3 NOS",
+      "rate": "₹123.45",
+      "gst": "18%",
+      "taxable": "₹370.35"
+    },
+    {
+      "no": "2",
+      "description": "Spare part assortment, lot 2",
+      "discount": null,
+      "hsn": "84879000",
+      "qty": "3 NOS",
+      "rate": "₹123.45",
+      "gst": "18%",
+      "taxable": "₹370.35"
+    },
+    {
+      "no": "3",
+      "description": "Spare part assortment, lot 3",
+      "discount": null,
+      "hsn": "84879000",
+      "qty": "3 NOS",
+      "rate": "₹123.45",
+      "gst": "5%",
+      "taxable": "₹370.35"
+    },
+    {
+      "no": "4",
+      "description": "Spare part assortment, lot 4",
+      "discount": null,
+      "hsn": "84879000",
+      "qty": "3 NOS",
+      "rate": "₹123.45",
+      "gst": "18%",
+      "taxable": "₹370.35"
+    },
+    {
+      "no": "5",
+      "description": "Spare part assortment, lot 5",
+      "discount": null,
+      "hsn": "84879000",
+      "qty": "3 NOS",
+      "rate": "₹123.45",
+      "gst": "18%",
+      "taxable": "₹370.35"
+    },
+    {
+      "no": "6",
+      "description": "Spare part assortment, lot 6",
+      "discount": null,
+      "hsn": "84879000",
+      "qty": "3 NOS",
+      "rate": "₹123.45",
+      "gst": "5%",
+      "taxable": "₹370.35"
+    },
+    {
+      "no": "7",
+      "description": "Spare part assortment, lot 7",
+      "discount": null,
+      "hsn": "84879000",
+      "qty": "3 NOS",
+      "rate": "₹123.45",
+      "gst": "18%",
+      "taxable": "₹370.35"
+    },
+    {
+      "no": "8",
+      "description": "Spare part assortment, lot 8",
+      "discount": null,
+      "hsn": "84879000",
+      "qty": "3 NOS",
+      "rate": "₹123.45",
+      "gst": "18%",
+      "taxable": "₹370.35"
+    },
+    {
+      "no": "9",
+      "description": "Spare part assortment, lot 9",
+      "discount": null,
+      "hsn": "84879000",
+      "qty": "3 NOS",
+      "rate": "₹123.45",
+      "gst": "5%",
+      "taxable": "₹370.35"
+    },
+    {
+      "no": "10",
+      "description": "Spare part assortment, lot 10",
+      "discount": null,
+      "hsn": "84879000",
+      "qty": "3 NOS",
+      "rate": "₹123.45",
+      "gst": "18%",
+      "taxable": "₹370.35"
+    },
+    {
+      "no": "11",
+      "description": "Spare part assortment, lot 11",
+      "discount": null,
+      "hsn": "84879000",
+      "qty": "3 NOS",
+      "rate": "₹123.45",
+      "gst": "18%",
+      "taxable": "₹370.35"
+    },
+    {
+      "no": "12",
+      "description": "Spare part assortment, lot 12",
+      "discount": null,
+      "hsn": "84879000",
+      "qty": "3 NOS",
+      "rate": "₹123.45",
+      "gst": "5%",
+      "taxable": "₹370.35"
+    },
+    {
+      "no": "13",
+      "description": "Spare part assortment, lot 13",
+      "discount": null,
+      "hsn": "84879000",
+      "qty": "3 NOS",
+      "rate": "₹123.45",
+      "gst": "18%",
+      "taxable": "₹370.35"
+    },
+    {
+      "no": "14",
+      "description": "Spare part assortment, lot 14",
+      "discount": null,
+      "hsn": "84879000",
+      "qty": "3 NOS",
+      "rate": "₹123.45",
+      "gst": "18%",
+      "taxable": "₹370.35"
+    },
+    {
+      "no": "15",
+      "description": "Spare part assortment, lot 15",
+      "discount": null,
+      "hsn": "84879000",
+      "qty": "3 NOS",
+      "rate": "₹123.45",
+      "gst": "5%",
+      "taxable": "₹370.35"
+    },
+    {
+      "no": "16",
+      "description": "Spare part assortment, lot 16",
+      "discount": null,
+      "hsn": "84879000",
+      "qty": "3 NOS",
+      "rate": "₹123.45",
+      "gst": "18%",
+      "taxable": "₹370.35"
+    },
+    {
+      "no": "17",
+      "description": "Spare part assortment, lot 17",
+      "discount": null,
+      "hsn": "84879000",
+      "qty": "3 NOS",
+      "rate": "₹123.45",
+      "gst": "18%",
+      "taxable": "₹370.35"
+    },
+    {
+      "no": "18",
+      "description": "Spare part assortment, lot 18",
+      "discount": null,
+      "hsn": "84879000",
+      "qty": "3 NOS",
+      "rate": "₹123.45",
+      "gst": "5%",
+      "taxable": "₹370.35"
+    },
+    {
+      "no": "19",
+      "description": "Spare part assortment, lot 19",
+      "discount": null,
+      "hsn": "84879000",
+      "qty": "3 NOS",
+      "rate": "₹123.45",
+      "gst": "18%",
+      "taxable": "₹370.35"
+    },
+    {
+      "no": "20",
+      "description": "Spare part assortment, lot 20",
+      "discount": null,
+      "hsn": "84879000",
+      "qty": "3 NOS",
+      "rate": "₹123.45",
+      "gst": "18%",
+      "taxable": "₹370.35"
+    },
+    {
+      "no": "21",
+      "description": "Spare part assortment, lot 21",
+      "discount": null,
+      "hsn": "84879000",
+      "qty": "3 NOS",
+      "rate": "₹123.45",
+      "gst": "5%",
+      "taxable": "₹370.35"
+    },
+    {
+      "no": "22",
+      "description": "Spare part assortment, lot 22",
+      "discount": null,
+      "hsn": "84879000",
+      "qty": "3 NOS",
+      "rate": "₹123.45",
+      "gst": "18%",
+      "taxable": "₹370.35"
+    },
+    {
+      "no": "23",
+      "description": "Spare part assortment, lot 23",
+      "discount": null,
+      "hsn": "84879000",
+      "qty": "3 NOS",
+      "rate": "₹123.45",
+      "gst": "18%",
+      "taxable": "₹370.35"
+    },
+    {
+      "no": "24",
+      "description": "Spare part assortment, lot 24",
+      "discount": null,
+      "hsn": "84879000",
+      "qty": "3 NOS",
+      "rate": "₹123.45",
+      "gst": "5%",
+      "taxable": "₹370.35"
+    },
+    {
+      "no": "25",
+      "description": "Spare part assortment, lot 25",
+      "discount": null,
+      "hsn": "84879000",
+      "qty": "3 NOS",
+      "rate": "₹123.45",
+      "gst": "18%",
+      "taxable": "₹370.35"
+    },
+    {
+      "no": "26",
+      "description": "Spare part assortment, lot 26",
+      "discount": null,
+      "hsn": "84879000",
+      "qty": "3 NOS",
+      "rate": "₹123.45",
+      "gst": "18%",
+      "taxable": "₹370.35"
+    },
+    {
+      "no": "27",
+      "description": "Spare part assortment, lot 27",
+      "discount": null,
+      "hsn": "84879000",
+      "qty": "3 NOS",
+      "rate": "₹123.45",
+      "gst": "5%",
+      "taxable": "₹370.35"
+    },
+    {
+      "no": "28",
+      "description": "Spare part assortment, lot 28",
+      "discount": null,
+      "hsn": "84879000",
+      "qty": "3 NOS",
+      "rate": "₹123.45",
+      "gst": "18%",
+      "taxable": "₹370.35"
+    },
+    {
+      "no": "29",
+      "description": "Spare part assortment, lot 29",
+      "discount": null,
+      "hsn": "84879000",
+      "qty": "3 NOS",
+      "rate": "₹123.45",
+      "gst": "18%",
+      "taxable": "₹370.35"
+    },
+    {
+      "no": "30",
+      "description": "Spare part assortment, lot 30",
+      "discount": null,
+      "hsn": "84879000",
+      "qty": "3 NOS",
+      "rate": "₹123.45",
+      "gst": "5%",
+      "taxable": "₹370.35"
+    },
+    {
+      "no": "31",
+      "description": "Spare part assortment, lot 31",
+      "discount": null,
+      "hsn": "84879000",
+      "qty": "3 NOS",
+      "rate": "₹123.45",
+      "gst": "18%",
+      "taxable": "₹370.35"
+    },
+    {
+      "no": "32",
+      "description": "Spare part assortment, lot 32",
+      "discount": null,
+      "hsn": "84879000",
+      "qty": "3 NOS",
+      "rate": "₹123.45",
+      "gst": "18%",
+      "taxable": "₹370.35"
+    },
+    {
+      "no": "33",
+      "description": "Spare part assortment, lot 33",
+      "discount": null,
+      "hsn": "84879000",
+      "qty": "3 NOS",
+      "rate": "₹123.45",
+      "gst": "5%",
+      "taxable": "₹370.35"
+    },
+    {
+      "no": "34",
+      "description": "Spare part assortment, lot 34",
+      "discount": null,
+      "hsn": "84879000",
+      "qty": "3 NOS",
+      "rate": "₹123.45",
+      "gst": "18%",
+      "taxable": "₹370.35"
+    },
+    {
+      "no": "35",
+      "description": "Spare part assortment, lot 35",
+      "discount": null,
+      "hsn": "84879000",
+      "qty": "3 NOS",
+      "rate": "₹123.45",
+      "gst": "18%",
+      "taxable": "₹370.35"
+    },
+    {
+      "no": "36",
+      "description": "Spare part assortment, lot 36",
+      "discount": null,
+      "hsn": "84879000",
+      "qty": "3 NOS",
+      "rate": "₹123.45",
+      "gst": "5%",
+      "taxable": "₹370.35"
+    },
+    {
+      "no": "37",
+      "description": "Spare part assortment, lot 37",
+      "discount": null,
+      "hsn": "84879000",
+      "qty": "3 NOS",
+      "rate": "₹123.45",
+      "gst": "18%",
+      "taxable": "₹370.35"
+    },
+    {
+      "no": "38",
+      "description": "Spare part assortment, lot 38",
+      "discount": null,
+      "hsn": "84879000",
+      "qty": "3 NOS",
+      "rate": "₹123.45",
+      "gst": "18%",
+      "taxable": "₹370.35"
+    },
+    {
+      "no": "39",
+      "description": "Spare part assortment, lot 39",
+      "discount": null,
+      "hsn": "84879000",
+      "qty": "3 NOS",
+      "rate": "₹123.45",
+      "gst": "5%",
+      "taxable": "₹370.35"
+    },
+    {
+      "no": "40",
+      "description": "Spare part assortment, lot 40",
+      "discount": null,
+      "hsn": "84879000",
+      "qty": "3 NOS",
+      "rate": "₹123.45",
+      "gst": "18%",
+      "taxable": "₹370.35"
+    },
+    {
+      "no": "41",
+      "description": "Spare part assortment, lot 41",
+      "discount": null,
+      "hsn": "84879000",
+      "qty": "3 NOS",
+      "rate": "₹123.45",
+      "gst": "18%",
+      "taxable": "₹370.35"
+    },
+    {
+      "no": "42",
+      "description": "Spare part assortment, lot 42",
+      "discount": null,
+      "hsn": "84879000",
+      "qty": "3 NOS",
+      "rate": "₹123.45",
+      "gst": "5%",
+      "taxable": "₹370.35"
+    },
+    {
+      "no": "43",
+      "description": "Spare part assortment, lot 43",
+      "discount": null,
+      "hsn": "84879000",
+      "qty": "3 NOS",
+      "rate": "₹123.45",
+      "gst": "18%",
+      "taxable": "₹370.35"
+    },
+    {
+      "no": "44",
+      "description": "Spare part assortment, lot 44",
+      "discount": null,
+      "hsn": "84879000",
+      "qty": "3 NOS",
+      "rate": "₹123.45",
+      "gst": "18%",
+      "taxable": "₹370.35"
+    },
+    {
+      "no": "45",
+      "description": "Spare part assortment, lot 45",
+      "discount": null,
+      "hsn": "84879000",
+      "qty": "3 NOS",
+      "rate": "₹123.45",
+      "gst": "5%",
+      "taxable": "₹370.35"
+    },
+    {
+      "no": "46",
+      "description": "Spare part assortment, lot 46",
+      "discount": null,
+      "hsn": "84879000",
+      "qty": "3 NOS",
+      "rate": "₹123.45",
+      "gst": "18%",
+      "taxable": "₹370.35"
+    },
+    {
+      "no": "47",
+      "description": "Spare part assortment, lot 47",
+      "discount": null,
+      "hsn": "84879000",
+      "qty": "3 NOS",
+      "rate": "₹123.45",
+      "gst": "18%",
+      "taxable": "₹370.35"
+    },
+    {
+      "no": "48",
+      "description": "Spare part assortment, lot 48",
+      "discount": null,
+      "hsn": "84879000",
+      "qty": "3 NOS",
+      "rate": "₹123.45",
+      "gst": "5%",
+      "taxable": "₹370.35"
+    },
+    {
+      "no": "49",
+      "description": "Spare part assortment, lot 49",
+      "discount": null,
+      "hsn": "84879000",
+      "qty": "3 NOS",
+      "rate": "₹123.45",
+      "gst": "18%",
+      "taxable": "₹370.35"
+    },
+    {
+      "no": "50",
+      "description": "Spare part assortment, lot 50",
+      "discount": null,
+      "hsn": "84879000",
+      "qty": "3 NOS",
+      "rate": "₹123.45",
+      "gst": "18%",
+      "taxable": "₹370.35"
+    },
+    {
+      "no": "51",
+      "description": "Spare part assortment, lot 51",
+      "discount": null,
+      "hsn": "84879000",
+      "qty": "3 NOS",
+      "rate": "₹123.45",
+      "gst": "5%",
+      "taxable": "₹370.35"
+    },
+    {
+      "no": "52",
+      "description": "Spare part assortment, lot 52",
+      "discount": null,
+      "hsn": "84879000",
+      "qty": "3 NOS",
+      "rate": "₹123.45",
+      "gst": "18%",
+      "taxable": "₹370.35"
+    },
+    {
+      "no": "53",
+      "description": "Spare part assortment, lot 53",
+      "discount": null,
+      "hsn": "84879000",
+      "qty": "3 NOS",
+      "rate": "₹123.45",
+      "gst": "18%",
+      "taxable": "₹370.35"
+    },
+    {
+      "no": "54",
+      "description": "Spare part assortment, lot 54",
+      "discount": null,
+      "hsn": "84879000",
+      "qty": "3 NOS",
+      "rate": "₹123.45",
+      "gst": "5%",
+      "taxable": "₹370.35"
+    },
+    {
+      "no": "55",
+      "description": "Spare part assortment, lot 55",
+      "discount": null,
+      "hsn": "84879000",
+      "qty": "3 NOS",
+      "rate": "₹123.45",
+      "gst": "18%",
+      "taxable": "₹370.35"
+    },
+    {
+      "no": "56",
+      "description": "Spare part assortment, lot 56",
+      "discount": null,
+      "hsn": "84879000",
+      "qty": "3 NOS",
+      "rate": "₹123.45",
+      "gst": "18%",
+      "taxable": "₹370.35"
+    },
+    {
+      "no": "57",
+      "description": "Spare part assortment, lot 57",
+      "discount": null,
+      "hsn": "84879000",
+      "qty": "3 NOS",
+      "rate": "₹123.45",
+      "gst": "5%",
+      "taxable": "₹370.35"
+    },
+    {
+      "no": "58",
+      "description": "Spare part assortment, lot 58",
+      "discount": null,
+      "hsn": "84879000",
+      "qty": "3 NOS",
+      "rate": "₹123.45",
+      "gst": "18%",
+      "taxable": "₹370.35"
+    },
+    {
+      "no": "59",
+      "description": "Spare part assortment, lot 59",
+      "discount": null,
+      "hsn": "84879000",
+      "qty": "3 NOS",
+      "rate": "₹123.45",
+      "gst": "18%",
+      "taxable": "₹370.35"
+    },
+    {
+      "no": "60",
+      "description": "Spare part assortment, lot 60",
+      "discount": null,
+      "hsn": "84879000",
+      "qty": "3 NOS",
+      "rate": "₹123.45",
+      "gst": "5%",
+      "taxable": "₹370.35"
+    }
+  ],
+  "tax_rows": [
+    {
+      "rate": "5%",
+      "taxable": "₹7,407.00",
+      "cgst": "₹185.00",
+      "sgst": "₹185.20",
+      "igst": "₹0.00",
+      "cess": "₹0.00"
+    },
+    {
+      "rate": "18%",
+      "taxable": "₹14,814.00",
+      "cgst": "₹1,333.20",
+      "sgst": "₹1,333.20",
+      "igst": "₹0.00",
+      "cess": "₹0.00"
+    }
+  ],
+  "state_tax": "SGST",
+  "show_cgst": true,
+  "show_igst": false,
+  "show_cess": false,
+  "totals": [
+    [
+      "Taxable value",
+      "₹22,221.00"
+    ],
+    [
+      "CGST",
+      "₹1,518.20"
+    ],
+    [
+      "SGST",
+      "₹1,518.40"
+    ],
+    [
+      "Round-off",
+      "₹0.40"
+    ]
+  ],
+  "total": "₹25,258.00",
+  "words": "Rupees twenty-five thousand two hundred fifty-eight only",
+  "sign_for": "For Khope Traders",
+  "signatory": "Rajendra Khope",
+  "logo": null,
+  "footer": "Tax invoice Draft · Khope Traders"
+}

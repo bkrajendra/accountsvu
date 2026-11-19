@@ -949,6 +949,178 @@ export interface Reconciliation {
   unmatchedEntries: MatchCandidate[];
 }
 
+// ---------------------------------------------------------------------------
+// Ledger and reports (Phase 1.6)
+// ---------------------------------------------------------------------------
+
+export interface TrialBalanceRow {
+  accountId: string;
+  code: string;
+  name: string;
+  kind: Account["kind"];
+  systemRole: string | null;
+  openingPaise: number;
+  debitPaise: number;
+  creditPaise: number;
+  closingPaise: number;
+}
+
+export interface TrialBalance {
+  from: string | null;
+  to: string | null;
+  rows: TrialBalanceRow[];
+  openingDebitPaise: number;
+  openingCreditPaise: number;
+  debitPaise: number;
+  creditPaise: number;
+  closingDebitPaise: number;
+  closingCreditPaise: number;
+  balanced: boolean;
+}
+
+export interface ReportLine {
+  accountId: string;
+  code: string;
+  name: string;
+  amountPaise: number;
+}
+
+export interface ReportSection {
+  key: string;
+  title: string;
+  lines: ReportLine[];
+  totalPaise: number;
+}
+
+export interface ProfitAndLoss {
+  from: string;
+  to: string;
+  sections: ReportSection[];
+  grossProfitPaise: number;
+  netProfitPaise: number;
+}
+
+export interface BalanceSheet {
+  asAt: string;
+  assets: ReportSection;
+  liabilities: ReportSection;
+  equity: ReportSection;
+  profitPaise: number;
+  totalAssetsPaise: number;
+  totalLiabilitiesAndEquityPaise: number;
+  balanced: boolean;
+}
+
+export interface Ledger {
+  id: string;
+  title: string;
+  subtitle: string;
+  ledgerType: "account" | "party";
+  from: string | null;
+  to: string | null;
+  openingPaise: number;
+  debitTotalPaise: number;
+  creditTotalPaise: number;
+  closingPaise: number;
+  lines: BookLine[];
+}
+
+export interface JournalEntryView {
+  entryId: string;
+  entryDate: string;
+  sourceType: string;
+  sourceId: string | null;
+  narration: string | null;
+  reversesEntryId: string | null;
+  postedAt: string;
+  postedBy: string | null;
+  totalPaise: number;
+  lines: { accountId: string; accountCode: string; accountName: string; debitPaise: number; creditPaise: number; partyName: string | null }[];
+}
+
+export interface JournalRegister {
+  from: string | null;
+  to: string | null;
+  entries: JournalEntryView[];
+  truncated: boolean;
+}
+
+export interface AgeingDocument {
+  documentKind: "sales" | "purchase";
+  id: string;
+  number: string | null;
+  docDate: string;
+  dueDate: string | null;
+  totalPaise: number;
+  outstandingPaise: number;
+  daysOverdue: number;
+  bucket: number;
+}
+
+export interface AgeingParty {
+  partyId: string;
+  partyName: string;
+  buckets: number[];
+  unallocatedPaise: number;
+  totalPaise: number;
+  documents: AgeingDocument[];
+}
+
+export interface Ageing {
+  kind: "receivables" | "payables";
+  asOf: string;
+  bucketLabels: string[];
+  parties: AgeingParty[];
+  buckets: number[];
+  unallocatedPaise: number;
+  totalPaise: number;
+}
+
+export interface BooksLock {
+  organisationId: string;
+  lockedUntil: string;
+  reason: string | null;
+  updatedAt: string;
+  updatedBy: string;
+}
+
+export interface FyClose {
+  id: string;
+  organisationId: string;
+  financialYear: string;
+  startDate: string;
+  endDate: string;
+  status: "closed" | "reopened";
+  entryId: string | null;
+  profitPaise: number;
+  closedAt: string;
+  closedBy: string;
+  reopenEntryId: string | null;
+  reopenReason: string | null;
+  reopenedAt: string | null;
+  reopenedBy: string | null;
+}
+
+export interface YearStatus extends FinancialYearInfo {
+  status: "open" | "closed";
+  ended: boolean;
+  close: FyClose | null;
+}
+
+export interface BooksControl {
+  lock: BooksLock | null;
+  booksStartDate: string;
+  years: YearStatus[];
+  history: FyClose[];
+}
+
+export interface LogoContent {
+  fileName: string;
+  contentType: string;
+  sizeBytes: number;
+  bytes: number[];
+}
+
 /** Error shape produced by src-tauri/src/commands.rs. */
 export class ApiError extends Error {
   readonly code: string;
@@ -968,14 +1140,100 @@ export const runningInTauri = isTauri();
  * browser) an in-memory preview backend answers instead, so the UI can be
  * developed standalone. It is never bundled into a code path the desktop uses.
  */
+// ---------------------------------------------------------------------------
+// Phase 1.7: documents, backup, app lock
+// ---------------------------------------------------------------------------
+
+export interface SavedFile {
+  path: string;
+  fileName: string;
+  sizeBytes: number;
+}
+
+export interface BackupLog {
+  id: string;
+  kind: "backup" | "restore";
+  happenedAt: string;
+  fileName: string;
+  sizeBytes: number;
+  sha256: string | null;
+  actor: string | null;
+}
+
+export interface BackupStatus {
+  lastBackup: BackupLog | null;
+  lastRestore: BackupLog | null;
+  daysSinceBackup: number | null;
+  due: boolean;
+}
+
+export interface BackupHeader {
+  format: number;
+  createdAt: string;
+  appVersion: string;
+  schemaVersion: number;
+  businessName: string;
+  databaseBytes: number;
+}
+
+export interface ChosenBackup {
+  fileName: string;
+  sizeBytes: number;
+  header: BackupHeader;
+}
+
+export interface DatabaseCheck {
+  integrity: string;
+  foreignKeyProblems: number;
+  schemaVersion: number;
+  businessName: string | null;
+  parties: number;
+  items: number;
+  salesDocuments: number;
+  purchaseDocuments: number;
+  vouchers: number;
+  journalEntries: number;
+  unbalancedEntries: number;
+  attachments: number;
+  lastEntryDate: string | null;
+}
+
+export interface RestoreCheck {
+  header: BackupHeader;
+  check: DatabaseCheck;
+}
+
+export interface LockStatus {
+  enabled: boolean;
+  locked: boolean;
+  idleMinutes: number;
+}
+
+export interface AppSession {
+  lock: LockStatus;
+  /** Set once after a restore: the file the replaced data was kept in. */
+  restoredKeptCopy: string | null;
+}
+
+export const IDLE_CHOICES = [0, 1, 5, 15, 30, 60] as const;
+
+/** Fired when the host reports the app is locked. */
+export const LOCKED_EVENT = "accountsvu:locked";
+
 async function call<T>(command: string, args?: Record<string, unknown>): Promise<T> {
   try {
     if (!runningInTauri) return (await previewBackend(command, args)) as T;
     return await invoke<T>(command, args);
   } catch (e) {
-    if (e instanceof ApiError) throw e;
-    if (typeof e === "object" && e !== null) throw new ApiError(e as ConstructorParameters<typeof ApiError>[0]);
-    throw new ApiError({ message: String(e) });
+    const err =
+      e instanceof ApiError
+        ? e
+        : typeof e === "object" && e !== null
+          ? new ApiError(e as ConstructorParameters<typeof ApiError>[0])
+          : new ApiError({ message: String(e) });
+    // The host refuses every command while the app is locked; show the lock screen.
+    if (err.code === "locked") window.dispatchEvent(new Event(LOCKED_EVENT));
+    throw err;
   }
 }
 
@@ -1079,6 +1337,48 @@ export const api = {
   ignoreStatementLine: (lineId: string) => call<null>("ignore_statement_line", { lineId }),
   undoStatementImport: (moneyAccountId: string, batch: string) =>
     call<number>("undo_statement_import", { moneyAccountId, batch }),
+
+  trialBalance: (from?: string, to?: string) => call<TrialBalance>("trial_balance", { from: from || null, to: to || null }),
+  profitAndLoss: (from: string, to: string) => call<ProfitAndLoss>("profit_and_loss", { from, to }),
+  balanceSheet: (asAt: string) => call<BalanceSheet>("balance_sheet", { asAt }),
+  generalLedger: (accountId: string, from?: string, to?: string) =>
+    call<Ledger>("general_ledger", { accountId, from: from || null, to: to || null }),
+  partyLedger: (partyId: string, from?: string, to?: string) =>
+    call<Ledger>("party_ledger", { partyId, from: from || null, to: to || null }),
+  journalRegister: (from?: string, to?: string) => call<JournalRegister>("journal_register", { from: from || null, to: to || null }),
+  ageing: (kind: "receivables" | "payables", asOf: string) => call<Ageing>("ageing", { kind, asOf }),
+  booksControl: () => call<BooksControl>("books_control"),
+  setBooksLock: (until: string | null, reason?: string) => call<BooksControl>("set_books_lock", { until, reason: reason || null }),
+  closeFinancialYear: (code: string) => call<BooksControl>("close_financial_year", { code }),
+  reopenFinancialYear: (code: string, reason: string) => call<BooksControl>("reopen_financial_year", { code, reason }),
+  /** Bytes cross IPC as a number array; the core caps logos at 1 MB. */
+  setLogo: (fileName: string, bytes: Uint8Array) => call<LogoContent>("set_logo", { fileName, bytes: Array.from(bytes) }),
+  getLogo: () => call<LogoContent | null>("get_logo"),
+  removeLogo: () => call<null>("remove_logo"),
+
+  /** Renders the PDF and asks where to save it; null when cancelled (desktop only). */
+  saveSalesPdf: (id: string) => call<SavedFile | null>("save_sales_pdf", { id }),
+  /** Opens the PDF in the default viewer, e.g. to print. */
+  openSalesPdf: (id: string) => call<null>("open_sales_pdf", { id }),
+  /** Shows a file this session saved in its folder. */
+  openSavedFile: (path: string) => call<null>("open_saved_file", { path }),
+
+  backupStatus: () => call<BackupStatus>("backup_status"),
+  createBackup: (passphrase: string) => call<{ file: SavedFile; status: BackupStatus } | null>("create_backup", { passphrase }),
+  chooseBackupFile: () => call<ChosenBackup | null>("choose_backup_file"),
+  verifyBackup: (passphrase: string) => call<RestoreCheck>("verify_backup", { passphrase }),
+  /** Replaces the data with the checked backup and restarts the app. */
+  applyRestore: () => call<null>("apply_restore"),
+  cancelRestore: () => call<null>("cancel_restore"),
+
+  appSession: () => call<AppSession>("app_session"),
+  lockApp: () => call<LockStatus>("lock_app"),
+  unlockApp: (pin: string) => call<LockStatus>("unlock_app", { pin }),
+  unlockWithRecovery: (code: string) => call<LockStatus>("unlock_with_recovery", { code }),
+  setAppLock: (pin: string, idleMinutes: number, currentPin?: string) =>
+    call<{ status: LockStatus; recoveryCode: string }>("set_app_lock", { pin, idleMinutes, currentPin: currentPin || null }),
+  setLockTimeout: (idleMinutes: number) => call<LockStatus>("set_lock_timeout", { idleMinutes }),
+  removeAppLock: (pin: string) => call<LockStatus>("remove_app_lock", { pin }),
 };
 
 /** Query keys shared by readers and the mutations that invalidate them. */
@@ -1106,4 +1406,10 @@ export const keys = {
   settlements: (kind: string, id: string) => ["settlements", kind, id] as const,
   moneyBook: (id: string, from: string, to: string) => ["moneyBook", id, from, to] as const,
   reconciliation: (id: string) => ["reconciliation", id] as const,
+  /** Every report shares this prefix, so one invalidation refreshes them all. */
+  report: (...parts: string[]) => ["report", ...parts] as const,
+  booksControl: ["booksControl"] as const,
+  logo: ["logo"] as const,
+  backupStatus: ["backupStatus"] as const,
+  session: ["session"] as const,
 };

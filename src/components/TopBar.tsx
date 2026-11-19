@@ -1,9 +1,10 @@
 import { forwardRef } from "react";
-import { Building2, ChevronDown, Search } from "lucide-react";
+import { Building2, ChevronDown, Lock, Search } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router";
 import { ThemeSwitcher } from "./ThemeSwitcher";
 import { api, keys } from "../lib/api";
+import { useSession } from "../lib/session";
 
 
 /**
@@ -15,6 +16,7 @@ export const TopBar = forwardRef<HTMLInputElement>(function TopBar(_props, searc
   const { data: profile } = useQuery({ queryKey: keys.profile, queryFn: api.businessProfile });
   const gstin = profile?.registrations.find((r) => r.status === "active")?.gstin;
   const fyLabel = profile?.currentFinancialYear.label.replace("-", "–") ?? "";
+  const { lock, lockNow } = useSession();
 
   return (
     <header className="material sticky top-0 z-20 flex h-14 shrink-0 items-center gap-3 border-b border-line px-5">
@@ -45,6 +47,17 @@ export const TopBar = forwardRef<HTMLInputElement>(function TopBar(_props, searc
           <span className="font-medium">{fyLabel}</span>
           <ChevronDown size={14} className="text-subtle" aria-hidden />
         </button>
+        {lock.enabled && (
+          <button
+            type="button"
+            title="Lock AccountsVU"
+            aria-label="Lock AccountsVU"
+            onClick={() => void lockNow()}
+            className="pressable grid size-9 place-items-center rounded-[10px] border border-line bg-surface text-muted shadow-card hover:bg-surface-2 hover:text-fg"
+          >
+            <Lock size={15} />
+          </button>
+        )}
         <ThemeSwitcher />
       </div>
     </header>

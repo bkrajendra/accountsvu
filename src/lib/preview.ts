@@ -6,6 +6,8 @@
  */
 import type {
   Account,
+  BackupLog,
+  LockStatus,
   AuditEvent,
   BusinessProfile,
   FinancialYearInfo,
@@ -16,8 +18,23 @@ import type {
   Item,
   ItemInput,
   Organisation,
+  Ageing,
+  AgeingParty,
   Attachment,
+  BalanceSheet,
   BookLine,
+  BooksControl,
+  BooksLock,
+  FyClose,
+  JournalRegister,
+  Ledger,
+  LogoContent,
+  ProfitAndLoss,
+  ReportLine,
+  ReportSection,
+  TrialBalance,
+  TrialBalanceRow,
+  YearStatus,
   MatchCandidate,
   MoneyAccount,
   MoneyAccountInput,
@@ -185,6 +202,8 @@ const SEED: [string, string, Account["kind"], string | null][] = [
   ["5000", "Purchases", "expense", "purchases"], ["6900", "Round-off", "expense", "round_off"],
   ["1400", "Fixed assets", "asset", "fixed_assets"], ["5100", "Freight inward", "expense", null],
   ["6000", "Rent", "expense", null], ["6040", "Office expenses", "expense", null], ["6060", "Bank charges", "expense", "bank_charges"], ["3100", "Drawings", "equity", "drawings"],
+  ["3200", "Retained earnings", "equity", "retained_earnings"], ["3900", "Opening balance adjustment", "equity", "opening_balance"],
+  ["4900", "Other income", "income", "other_income"],
 ];
 
 function preview(series: Series): Series {
@@ -1332,11 +1351,447 @@ async function statementCommand(command: string, args: Record<string, any>): Pro
   }
 }
 
+
+// ---------------------------------------------------------------------------
+// Ledger and reports (Phase 1.6) — the stand-in rebuilds a journal from the
+// in-memory documents so report screens can be reviewed in a browser.
+// ---------------------------------------------------------------------------
+
+type PEntry = { id: string; date: string; sourceType: string; sourceId: string | null; narration: string | null; postedAt: string; reverses: string | null; lines: { accountId: string; debit: number; credit: number; partyId: string | null }[] };
+
+let booksLock: BooksLock | null = null;
+let fyCloses: FyClose[] = [];
+let closingEntries: PEntry[] = [];
+let logo: LogoContent | null = null;
+
+const roleId = (role: string) => accounts.find((a) => a.systemRole === role)?.id ?? "";
+
+function mkEntry(id: string, date: string, sourceType: string, sourceId: string | null, narration: string | null, postedAt: string, lines: PEntry["lines"], reverses: string | null = null): PEntry {
+  return { id, date, sourceType, sourceId, narration, postedAt, reverses, lines: lines.filter((l) => l.debit || l.credit) };
+}
+const flip = (lines: PEntry["lines"]) => lines.map((l) => ({ ...l, debit: l.credit, credit: l.debit }));
+const tax = (d: { cgstPaise: number; sgstPaise: number; utgstPaise: number; igstPaise: number; cessPaise: number }) => d.cgstPaise + d.sgstPaise + d.utgstPaise + d.igstPaise + d.cessPaise;
+
+function journal(): PEntry[] {
+  const out: PEntry[] = [];
+  const start = org?.booksStartDate ?? "1970-01-01";
+  for (const p of parties) {
+    const ob = (p as Party & { openingBalancePaise?: number }).openingBalancePaise ?? 0;
+    if (!ob) continue;
+    const control = roleId(ob > 0 ? "receivables" : "payables");
+    out.push(mkEntry(`pob-${p.id}`, start, "party_opening_balance", p.id, `Opening balance — ${p.name}`, "", [
+      { accountId: control, debit: Math.max(ob, 0), credit: Math.max(-ob, 0), partyId: p.id },
+      { accountId: roleId("opening_balance"), debit: Math.max(-ob, 0), credit: Math.max(ob, 0), partyId: null },
+    ]));
+  }
+  for (const [accountId, ob] of openings) {
+    if (!ob) continue;
+    out.push(mkEntry(`aob-${accountId}`, start, "account_opening_balance", accountId, "Opening balance", "", [
+      { accountId, debit: Math.max(ob, 0), credit: Math.max(-ob, 0), partyId: null },
+      { accountId: roleId("opening_balance"), debit: Math.max(-ob, 0), credit: Math.max(ob, 0), partyId: null },
+    ]));
+  }
+  for (const d of salesDocs.filter((x) => x.status !== "draft")) {
+    const credit = d.docType === "credit_note";
+    let lines: PEntry["lines"] = [
+      { accountId: roleId("receivables"), debit: d.totalPaise, credit: 0, partyId: d.partyId },
+      { accountId: roleId("sales"), debit: 0, credit: d.taxablePaise, partyId: null },
+      { accountId: roleId("output_igst"), debit: 0, credit: tax(d), partyId: null },
+      { accountId: roleId("round_off"), debit: Math.max(-d.roundOffPaise, 0), credit: Math.max(d.roundOffPaise, 0), partyId: null },
+    ];
+    if (credit) lines = flip(lines);
+    const src = credit ? "sales_credit_note" : "sales_invoice";
+    out.push(mkEntry(`s-${d.id}`, d.docDate, src, d.id, d.number, d.createdAt, lines));
+    if (d.status === "cancelled") out.push(mkEntry(`sc-${d.id}`, d.docDate, src, d.id, `Cancellation of ${d.number}`, d.updatedAt, flip(lines), `s-${d.id}`));
+  }
+  for (const d of purchaseDocs.filter((x) => x.status !== "draft")) {
+    const pay = d.paymentMode === "credit" ? roleId("payables") : roleId(d.paymentMode);
+    let lines: PEntry["lines"] = [
+      ...d.lines.map((l) => ({ accountId: l.accountId, debit: l.taxablePaise, credit: 0, partyId: null })),
+      { accountId: roleId("input_igst"), debit: tax(d), credit: 0, partyId: null },
+      { accountId: roleId("round_off"), debit: Math.max(d.roundOffPaise, 0), credit: Math.max(-d.roundOffPaise, 0), partyId: null },
+      { accountId: pay, debit: 0, credit: d.totalPaise, partyId: d.paymentMode === "credit" ? d.partyId : null },
+    ];
+    if (d.docType === "debit_note") lines = flip(lines);
+    const src = d.docType === "debit_note" ? "purchase_debit_note" : "purchase";
+    out.push(mkEntry(`p-${d.id}`, d.docDate, src, d.id, d.supplierInvoiceNumber ?? d.number, d.createdAt, lines));
+    if (d.status === "cancelled") out.push(mkEntry(`pc-${d.id}`, d.docDate, src, d.id, "Cancellation", d.updatedAt, flip(lines), `p-${d.id}`));
+  }
+  for (const v of vouchers) {
+    const m = moneyAccounts.find((x) => x.id === v.moneyAccountId)!;
+    const other = v.partyId ? roleId(v.voucherType === "receipt" ? "receivables" : "payables") : v.counterAccountId!;
+    const inflow = v.voucherType === "receipt";
+    const lines: PEntry["lines"] = [
+      { accountId: m.accountId, debit: inflow ? v.amountPaise : 0, credit: inflow ? 0 : v.amountPaise, partyId: null },
+      { accountId: other, debit: inflow ? 0 : v.amountPaise, credit: inflow ? v.amountPaise : 0, partyId: v.partyId },
+    ];
+    out.push(mkEntry(v.journalEntryId, v.voucherDate, v.voucherType, v.id, v.narration ?? v.number, v.createdAt, lines));
+    if (v.cancelEntryId) out.push(mkEntry(v.cancelEntryId, v.voucherDate, v.voucherType, v.id, `Cancellation of ${v.number}`, v.cancelledAt ?? "", flip(lines), v.journalEntryId));
+  }
+  out.push(...closingEntries);
+  return out.sort((a, b) => (a.date + a.postedAt + a.id).localeCompare(b.date + b.postedAt + b.id));
+}
+
+function totals(from: string | null, to: string | null, exclude?: string) {
+  const map = new Map(accounts.map((a) => [a.id, { account: a, opening: 0, debit: 0, credit: 0 }]));
+  for (const e of journal()) {
+    if (exclude && e.sourceType === exclude) continue;
+    for (const l of e.lines) {
+      const t = map.get(l.accountId);
+      if (!t) continue;
+      if (from && e.date < from) t.opening += l.debit - l.credit;
+      else if (!to || e.date <= to) {
+        t.debit += l.debit;
+        t.credit += l.credit;
+      }
+    }
+  }
+  return [...map.values()].sort((a, b) => a.account.code.localeCompare(b.account.code));
+}
+
+function bookOf(pred: (l: PEntry["lines"][number]) => boolean, from: string | null, to: string | null): Ledger {
+  let opening = 0;
+  const lines: BookLine[] = [];
+  let bal = 0;
+  for (const e of journal()) {
+    const mine = e.lines.filter(pred);
+    if (!mine.length) continue;
+    const dr = mine.reduce((a, l) => a + l.debit, 0);
+    const cr = mine.reduce((a, l) => a + l.credit, 0);
+    if (from && e.date < from) {
+      opening += dr - cr;
+      continue;
+    }
+    if (to && e.date > to) continue;
+    if (!lines.length) bal = opening;
+    bal += dr - cr;
+    const partyId = e.lines.find((l) => l.partyId)?.partyId;
+    lines.push({ entryId: e.id, entryDate: e.date, sourceType: e.sourceType, sourceId: e.sourceId, narration: e.narration, debitPaise: dr, creditPaise: cr, partyName: parties.find((p) => p.id === partyId)?.name ?? null, postedAt: e.postedAt, statementLineId: null, balancePaise: bal });
+  }
+  const dr = lines.reduce((a, l) => a + l.debitPaise, 0);
+  const cr = lines.reduce((a, l) => a + l.creditPaise, 0);
+  return { id: "", title: "", subtitle: "", ledgerType: "account", from, to, openingPaise: opening, debitTotalPaise: dr, creditTotalPaise: cr, closingPaise: opening + dr - cr, lines };
+}
+
+const lineOf = (t: { account: Account }, amount: number): ReportLine => ({ accountId: t.account.id, code: t.account.code, name: t.account.name, amountPaise: amount });
+const sectionOf = (key: string, title: string, lines: ReportLine[]): ReportSection => ({ key, title, lines, totalPaise: lines.reduce((a, l) => a + l.amountPaise, 0) });
+
+function yearsList(): YearStatus[] {
+  if (!org) return [];
+  const todayIso = today();
+  const startMonth = org.fyStartMonth;
+  const [by, bm] = org.booksStartDate.split("-").map(Number);
+  let y = bm >= startMonth ? by : by - 1;
+  const out: YearStatus[] = [];
+  for (;;) {
+    const start = `${y}-${String(startMonth).padStart(2, "0")}-01`;
+    if (start > todayIso) break;
+    const endD = new Date(y + 1, startMonth - 1, 0);
+    const end = `${endD.getFullYear()}-${String(endD.getMonth() + 1).padStart(2, "0")}-${String(endD.getDate()).padStart(2, "0")}`;
+    const code = startMonth === 1 ? String(y) : `${y}-${String((y + 1) % 100).padStart(2, "0")}`;
+    const close = fyCloses.find((c) => c.financialYear === code && c.status === "closed") ?? null;
+    out.push({ code, label: `FY ${code}`, startDate: start, endDate: end, status: close ? "closed" : "open", ended: end < todayIso, close });
+    y++;
+  }
+  return out.reverse();
+}
+
+const control = (): BooksControl => ({ lock: booksLock, booksStartDate: org?.booksStartDate ?? "", years: yearsList(), history: [...fyCloses].reverse() });
+
+function reportCommand(command: string, args: Record<string, any>): unknown {
+  switch (command) {
+    case "trial_balance": {
+      const rows = totals(args.from, args.to)
+        .filter((t) => t.opening || t.debit || t.credit)
+        .map((t) => ({ accountId: t.account.id, code: t.account.code, name: t.account.name, kind: t.account.kind, systemRole: t.account.systemRole, openingPaise: t.opening, debitPaise: t.debit, creditPaise: t.credit, closingPaise: t.opening + t.debit - t.credit }));
+      const sum = (f: (r: TrialBalanceRow) => number) => rows.reduce((a, r) => a + f(r), 0);
+      const r: TrialBalance = {
+        from: args.from ?? null, to: args.to ?? null, rows,
+        openingDebitPaise: sum((r) => Math.max(r.openingPaise, 0)), openingCreditPaise: sum((r) => Math.max(-r.openingPaise, 0)),
+        debitPaise: sum((r) => r.debitPaise), creditPaise: sum((r) => r.creditPaise),
+        closingDebitPaise: sum((r) => Math.max(r.closingPaise, 0)), closingCreditPaise: sum((r) => Math.max(-r.closingPaise, 0)), balanced: true,
+      };
+      r.balanced = r.debitPaise === r.creditPaise && r.closingDebitPaise === r.closingCreditPaise;
+      return r;
+    }
+    case "profit_and_loss": {
+      const ts = totals(args.from, args.to, "year_close").filter((t) => t.debit !== t.credit);
+      const mv = (t: (typeof ts)[number]) => t.debit - t.credit;
+      const sections = [
+        sectionOf("trading_income", "Sales", ts.filter((t) => t.account.kind === "income" && t.account.systemRole === "sales").map((t) => lineOf(t, -mv(t)))),
+        sectionOf("direct_costs", "Cost of sales", ts.filter((t) => t.account.kind === "expense" && t.account.code.startsWith("5")).map((t) => lineOf(t, mv(t)))),
+        sectionOf("other_income", "Other income", ts.filter((t) => t.account.kind === "income" && t.account.systemRole !== "sales").map((t) => lineOf(t, -mv(t)))),
+        sectionOf("operating_expenses", "Operating expenses", ts.filter((t) => t.account.kind === "expense" && !t.account.code.startsWith("5")).map((t) => lineOf(t, mv(t)))),
+      ];
+      const gross = sections[0].totalPaise - sections[1].totalPaise;
+      return { from: args.from, to: args.to, sections, grossProfitPaise: gross, netProfitPaise: gross + sections[2].totalPaise - sections[3].totalPaise } satisfies ProfitAndLoss;
+    }
+    case "balance_sheet": {
+      const ts = totals(null, args.asAt);
+      const bal = (t: (typeof ts)[number]) => t.debit - t.credit;
+      const assets = sectionOf("assets", "Assets", ts.filter((t) => t.account.kind === "asset" && bal(t)).map((t) => lineOf(t, bal(t))));
+      const liabilities = sectionOf("liabilities", "Liabilities", ts.filter((t) => t.account.kind === "liability" && bal(t)).map((t) => lineOf(t, -bal(t))));
+      const equity = sectionOf("equity", "Capital and reserves", ts.filter((t) => t.account.kind === "equity" && bal(t)).map((t) => lineOf(t, -bal(t))));
+      const profit = -ts.filter((t) => t.account.kind === "income" || t.account.kind === "expense").reduce((a, t) => a + bal(t), 0);
+      const right = liabilities.totalPaise + equity.totalPaise + profit;
+      return { asAt: args.asAt, assets, liabilities, equity, profitPaise: profit, totalAssetsPaise: assets.totalPaise, totalLiabilitiesAndEquityPaise: right, balanced: assets.totalPaise === right } satisfies BalanceSheet;
+    }
+    case "general_ledger": {
+      const a = accounts.find((x) => x.id === args.accountId) ?? nf("Account not found");
+      return { ...bookOf((l) => l.accountId === a.id, args.from, args.to), id: a.id, title: a.name, subtitle: `${a.code} · ${a.kind}`, ledgerType: "account" } satisfies Ledger;
+    }
+    case "party_ledger": {
+      const p = parties.find((x) => x.id === args.partyId) ?? nf("Party not found");
+      return { ...bookOf((l) => l.partyId === p.id, args.from, args.to), id: p.id, title: p.name, subtitle: p.gstin ?? p.kind, ledgerType: "party" } satisfies Ledger;
+    }
+    case "journal_register": {
+      const entries = journal()
+        .filter((e) => (!args.from || e.date >= args.from) && (!args.to || e.date <= args.to))
+        .map((e) => ({
+          entryId: e.id, entryDate: e.date, sourceType: e.sourceType, sourceId: e.sourceId, narration: e.narration, reversesEntryId: e.reverses, postedAt: e.postedAt, postedBy: "owner",
+          totalPaise: e.lines.reduce((a, l) => a + l.debit, 0),
+          lines: e.lines.map((l) => {
+            const a = accounts.find((x) => x.id === l.accountId);
+            return { accountId: l.accountId, accountCode: a?.code ?? "", accountName: a?.name ?? "", debitPaise: l.debit, creditPaise: l.credit, partyName: parties.find((p) => p.id === l.partyId)?.name ?? null };
+          }),
+        }));
+      return { from: args.from ?? null, to: args.to ?? null, entries: entries.slice(0, 1000), truncated: entries.length > 1000 } satisfies JournalRegister;
+    }
+    case "ageing": {
+      const kind = args.kind as "receivables" | "payables";
+      const asOf: string = args.asOf;
+      const map = new Map<string, AgeingParty>();
+      const docs = kind === "receivables"
+        ? salesDocs.filter((d) => d.status === "issued" && d.docType !== "credit_note" && d.docDate <= asOf).map((d) => ({ kind: "sales" as const, d, number: d.number, date: d.docDate, adjusted: salesDocs.filter((c) => c.originalDocumentId === d.id && c.status === "issued").reduce((a, c) => a + c.totalPaise, 0) }))
+        : purchaseDocs.filter((d) => d.status === "recorded" && d.docType !== "debit_note" && d.paymentMode === "credit" && d.docDate <= asOf).map((d) => ({ kind: "purchase" as const, d, number: d.supplierInvoiceNumber ?? d.number, date: d.supplierInvoiceDate ?? d.docDate, adjusted: purchaseDocs.filter((n) => n.originalDocumentId === d.id && n.status === "recorded").reduce((a, n) => a + n.totalPaise, 0) }));
+      for (const { kind: dk, d, number, date, adjusted } of docs) {
+        const outstanding = d.totalPaise - d.paidPaise - adjusted;
+        if (outstanding <= 0 || !d.partyId) continue;
+        const days = Math.round((Date.parse(asOf) - Date.parse(d.dueDate ?? date)) / 86_400_000);
+        const bucket = days <= 0 ? 0 : days <= 30 ? 1 : days <= 60 ? 2 : days <= 90 ? 3 : 4;
+        const p = map.get(d.partyId) ?? { partyId: d.partyId, partyName: d.partyName ?? "", buckets: [0, 0, 0, 0, 0], unallocatedPaise: 0, totalPaise: 0, documents: [] };
+        p.buckets[bucket] += outstanding;
+        p.totalPaise += outstanding;
+        p.documents.push({ documentKind: dk, id: d.id, number, docDate: date, dueDate: d.dueDate, totalPaise: d.totalPaise, outstandingPaise: outstanding, daysOverdue: days, bucket });
+        map.set(d.partyId, p);
+      }
+      const list = [...map.values()].sort((a, b) => b.totalPaise - a.totalPaise);
+      const buckets = [0, 1, 2, 3, 4].map((i) => list.reduce((a, p) => a + p.buckets[i], 0));
+      return { kind, asOf, bucketLabels: ["Not due", "1–30 days", "31–60 days", "61–90 days", "Over 90 days"], parties: list, buckets, unallocatedPaise: 0, totalPaise: list.reduce((a, p) => a + p.totalPaise, 0) } satisfies Ageing;
+    }
+    case "books_control":
+      return control();
+    case "set_books_lock": {
+      const until: string | null = args.until ?? null;
+      const reopening = !!booksLock && (!until || until < booksLock.lockedUntil);
+      if (reopening && !String(args.reason ?? "").trim()) fail([["reason", "Say why the period is being reopened."]]);
+      if (until && until > today()) fail([["lockedUntil", "You can't lock a date that hasn't happened yet."]]);
+      if (fyCloses.some((c) => c.status === "closed" && (!until || c.endDate > until))) conflict("A closed year stays locked. Reopen it first.");
+      booksLock = until ? { organisationId: org!.id, lockedUntil: until, reason: args.reason ?? null, updatedAt: now(), updatedBy: "owner" } : null;
+      log(reopening ? "books_lock.reopen" : "books_lock.lock", null, booksLock);
+      return control();
+    }
+    case "close_financial_year": {
+      const y = yearsList().find((x) => x.code === args.code) ?? nf("Year not found");
+      if (!y.ended) conflict(`${y.code} hasn't ended yet. A year can be closed from the day after it ends.`);
+      if (y.status === "closed") conflict(`${y.code} is already closed.`);
+      const ts = totals(y.startDate, y.endDate, "year_close").filter((t) => (t.account.kind === "income" || t.account.kind === "expense") && t.debit !== t.credit);
+      const profit = -ts.reduce((a, t) => a + t.debit - t.credit, 0);
+      const cid = id();
+      const lines = ts.map((t) => ({ accountId: t.account.id, debit: Math.max(t.credit - t.debit, 0), credit: Math.max(t.debit - t.credit, 0), partyId: null }));
+      lines.push({ accountId: roleId("retained_earnings") || roleId("capital"), debit: Math.max(-profit, 0), credit: Math.max(profit, 0), partyId: null });
+      const entry = mkEntry(`yc-${cid}`, y.endDate, "year_close", cid, `Year-end close ${y.code}`, now(), lines);
+      closingEntries.push(entry);
+      fyCloses.push({ id: cid, organisationId: org!.id, financialYear: y.code, startDate: y.startDate, endDate: y.endDate, status: "closed", entryId: entry.id, profitPaise: profit, closedAt: now(), closedBy: "owner", reopenEntryId: null, reopenReason: null, reopenedAt: null, reopenedBy: null });
+      if (!booksLock || booksLock.lockedUntil < y.endDate) booksLock = { organisationId: org!.id, lockedUntil: y.endDate, reason: `Year ${y.code} closed`, updatedAt: now(), updatedBy: "owner" };
+      log("financial_year.close", cid, { financialYear: y.code });
+      return control();
+    }
+    case "reopen_financial_year": {
+      if (!String(args.reason ?? "").trim()) fail([["reason", "Say why the year is being reopened."]]);
+      const c = fyCloses.find((x) => x.financialYear === args.code && x.status === "closed") ?? conflict(`${args.code} isn't closed.`);
+      if (fyCloses.some((x) => x.status === "closed" && x.startDate > c.startDate)) conflict("Reopen the later years first; years reopen newest first.");
+      const entry = closingEntries.find((e) => e.id === c.entryId);
+      if (entry) closingEntries.push(mkEntry(`yr-${c.id}`, c.endDate, "year_close", c.id, `Year ${c.financialYear} reopened`, now(), flip(entry.lines), entry.id));
+      fyCloses = fyCloses.map((x) => (x.id === c.id ? { ...x, status: "reopened", reopenEntryId: `yr-${c.id}`, reopenReason: args.reason, reopenedAt: now(), reopenedBy: "owner" } : x));
+      const before = new Date(Date.parse(c.startDate) - 86_400_000).toISOString().slice(0, 10);
+      booksLock = before >= (org?.booksStartDate ?? "") ? { organisationId: org!.id, lockedUntil: before, reason: `Year ${c.financialYear} reopened: ${args.reason}`, updatedAt: now(), updatedBy: "owner" } : null;
+      log("financial_year.reopen", c.id, { reason: args.reason });
+      return control();
+    }
+    case "set_logo": {
+      const bytes = args.bytes as number[];
+      if (bytes.length > 1024 * 1024) throw { code: "invalid", message: "The logo must be 1 MB or smaller.", fields: [] } satisfies Fail;
+      const head = String.fromCharCode(...bytes.slice(0, 200)).toLowerCase();
+      const type = bytes[0] === 0x89 && bytes[1] === 0x50 ? "image/png" : bytes[0] === 0xff && bytes[1] === 0xd8 ? "image/jpeg" : head.includes("<svg") ? "image/svg+xml" : null;
+      if (!type) throw { code: "invalid", message: "Use a PNG, JPEG or SVG image for the logo.", fields: [] } satisfies Fail;
+      logo = { fileName: args.fileName, contentType: type, sizeBytes: bytes.length, bytes };
+      log("organisation_logo.update", org?.id ?? null, { fileName: args.fileName });
+      return logo;
+    }
+    case "get_logo":
+      return logo;
+    case "remove_logo":
+      logo = null;
+      log("organisation_logo.remove", org?.id ?? null);
+      return null;
+    default:
+      return undefined;
+  }
+}
+
+
+// ---------------------------------------------------------------------------
+// Phase 1.7 stand-ins: PDFs, backups and the app lock run in the desktop host.
+// The preview simulates them so the screens can be exercised in a browser.
+// ---------------------------------------------------------------------------
+
+let lockCfg: { pin: string; recovery: string; idleMinutes: number } | null = null;
+let locked = false;
+let lockFailures = 0;
+let backupLog: BackupLog[] = [];
+let lastBackupPassphrase: string | null = null;
+let restoreChosen = false;
+let restoreChecked = false;
+const LOCK_FREE = new Set(["app_session", "lock_app", "unlock_app", "unlock_with_recovery"]);
+
+function lockStatus(): LockStatus {
+  return { enabled: !!lockCfg, locked, idleMinutes: lockCfg?.idleMinutes ?? 0 };
+}
+
+function pinError(pin: string): string | null {
+  const digits = /^\d+$/.test(pin);
+  if (digits && (pin.length < 4 || pin.length > 12)) return "Use 4 to 12 digits, or a password of at least 6 characters.";
+  if (!digits && (pin.length < 6 || pin.length > 64)) return "A password needs 6 to 64 characters; a PIN needs 4 to 12 digits.";
+  return null;
+}
+
+function backupStatusView() {
+  const last = backupLog.find((b) => b.kind === "backup") ?? null;
+  const days = last ? Math.floor((Date.now() - Date.parse(last.happenedAt)) / 86_400_000) : null;
+  return { lastBackup: last, lastRestore: backupLog.find((b) => b.kind === "restore") ?? null, daysSinceBackup: days, due: days === null || days >= 7 };
+}
+
+function checkPin(pin: string, field = "pin") {
+  if (lockFailures >= 5) throw { code: "throttled", message: "Too many wrong attempts. Try again in 30 seconds.", fields: [] } satisfies Fail;
+  if (!lockCfg || pin !== lockCfg.pin) {
+    lockFailures++;
+    fail([[field, "That PIN isn't right."]]);
+  }
+  lockFailures = 0;
+}
+
+function businessName(): string {
+  return org ? org.tradeName ?? org.legalName : "Khope Traders";
+}
+
+function hostCommand(command: string, args: Record<string, any>): unknown {
+  switch (command) {
+    case "app_session":
+      return { lock: lockStatus(), restoredKeptCopy: null };
+    case "lock_app":
+      if (lockCfg) locked = true;
+      return lockStatus();
+    case "unlock_app":
+      checkPin(args.pin);
+      locked = false;
+      return lockStatus();
+    case "unlock_with_recovery": {
+      const norm = (x: string) => x.toUpperCase().replace(/[^A-Z0-9]/g, "");
+      if (!lockCfg || norm(args.code ?? "") !== norm(lockCfg.recovery)) fail([["code", "That recovery code isn't right."]]);
+      lockCfg = null;
+      locked = false;
+      return lockStatus();
+    }
+    case "set_app_lock": {
+      if (lockCfg) checkPin(args.currentPin ?? "", "currentPin");
+      const e = pinError(args.pin ?? "");
+      if (e) fail([["pin", e]]);
+      const chars = "23456789ABCDEFGHJKMNPQRSTUVWXYZ";
+      const group = () => Array.from({ length: 4 }, () => chars[Math.floor(Math.random() * chars.length)]).join("");
+      const code = [group(), group(), group(), group()].join("-");
+      lockCfg = { pin: args.pin, recovery: code, idleMinutes: args.idleMinutes };
+      return { status: lockStatus(), recoveryCode: code };
+    }
+    case "set_lock_timeout":
+      if (lockCfg) lockCfg.idleMinutes = args.idleMinutes;
+      return lockStatus();
+    case "remove_app_lock":
+      checkPin(args.pin);
+      lockCfg = null;
+      locked = false;
+      return lockStatus();
+    case "save_sales_pdf":
+    case "open_sales_pdf": {
+      const d = salesDocs.find((x) => x.id === args.id);
+      if (!d) throw { code: "not_found", message: "Document not found", fields: [] } satisfies Fail;
+      if (command === "open_sales_pdf") return null;
+      const stem = d.number ?? (d.docType === "credit_note" ? "Credit-note-draft" : "Tax-invoice-draft");
+      const fileName = stem.replace(/[^A-Za-z0-9_-]+/g, "-") + ".pdf";
+      return { path: "C:\\Users\\you\\Documents\\" + fileName, fileName, sizeBytes: 48_213 };
+    }
+    case "open_saved_file":
+      return null;
+    case "backup_status":
+      return backupStatusView();
+    case "create_backup": {
+      if (!org) throw { code: "not_set_up", message: "set up your business first", fields: [] } satisfies Fail;
+      if ((args.passphrase ?? "").length < 8) fail([["passphrase", "Use at least 8 characters."]]);
+      lastBackupPassphrase = args.passphrase;
+      const name = businessName().replace(/[^A-Za-z0-9]+/g, "-").replace(/-+$/, "");
+      const t = new Date();
+      const pad = (n: number) => String(n).padStart(2, "0");
+      const fileName = name + "-" + t.getFullYear() + "-" + pad(t.getMonth() + 1) + "-" + pad(t.getDate()) + "-" + pad(t.getHours()) + pad(t.getMinutes()) + ".avbackup";
+      const rec: BackupLog = { id: id(), kind: "backup", happenedAt: now(), fileName, sizeBytes: 912_384, sha256: null, actor: "owner" };
+      backupLog.unshift(rec);
+      log("backup.create", rec.id, rec);
+      return { file: { path: "C:\\Users\\you\\Documents\\" + fileName, fileName, sizeBytes: rec.sizeBytes }, status: backupStatusView() };
+    }
+    case "choose_backup_file": {
+      restoreChosen = true;
+      restoreChecked = false;
+      const last = backupLog.find((b) => b.kind === "backup");
+      return {
+        fileName: last?.fileName ?? "Khope-Traders-2026-11-18-1830.avbackup",
+        sizeBytes: last?.sizeBytes ?? 912_384,
+        header: { format: 1, createdAt: last?.happenedAt ?? now(), appVersion: "0.1.0", schemaVersion: 8, businessName: businessName(), databaseBytes: 901_120 },
+      };
+    }
+    case "verify_backup": {
+      if (!restoreChosen) throw { code: "not_found", message: "Choose a backup file first.", fields: [] } satisfies Fail;
+      if (!args.passphrase || (lastBackupPassphrase !== null && args.passphrase !== lastBackupPassphrase))
+        fail([["passphrase", "That passphrase doesn't open this backup, or the file has been changed."]]);
+      restoreChecked = true;
+      return {
+        header: { format: 1, createdAt: now(), appVersion: "0.1.0", schemaVersion: 8, businessName: businessName(), databaseBytes: 901_120 },
+        check: {
+          integrity: "ok", foreignKeyProblems: 0, schemaVersion: 8, businessName: businessName(),
+          parties: parties.length, items: items.length, salesDocuments: salesDocs.length, purchaseDocuments: purchaseDocs.length,
+          vouchers: vouchers.length, journalEntries: salesDocs.filter((d) => d.status !== "draft").length, unbalancedEntries: 0, attachments: 0,
+          lastEntryDate: salesDocs.map((d) => d.docDate).sort().at(-1) ?? null,
+        },
+      };
+    }
+    case "apply_restore":
+      if (!restoreChecked) throw { code: "conflict", message: "Check the backup with its passphrase first.", fields: [] } satisfies Fail;
+      throw { code: "invalid_input", message: "The browser preview can't restart. Restoring runs in the desktop app.", fields: [] } satisfies Fail;
+    case "cancel_restore":
+      restoreChosen = false;
+      restoreChecked = false;
+      return null;
+  }
+  return undefined;
+}
+
 export async function previewBackend(command: string, args: Record<string, any> = {}): Promise<unknown> {
   await new Promise((r) => setTimeout(r, 120)); // feel like real IPC
+  // Mirrors the desktop host's gate: while locked only the unlock commands pass.
+  if (locked && !LOCK_FREE.has(command)) throw { code: "locked", message: "AccountsVU is locked. Enter your PIN to continue.", fields: [] } satisfies Fail;
+  const hosted = hostCommand(command, args);
+  if (hosted !== undefined) return hosted;
   switch (command) {
     case "app_health":
-      return { appVersion: "0.1.0", schemaVersion: 6, database: "(browser preview — in memory)", organisationConfigured: !!org };
+      return { appVersion: "0.1.0", schemaVersion: 8, database: "(browser preview — in memory)", organisationConfigured: !!org };
     case "dashboard_summary":
       return {
         salesThisMonth: "0", purchasesThisMonth: "0",
@@ -1438,7 +1893,7 @@ export async function previewBackend(command: string, args: Record<string, any> 
     case "list_audit_events":
       return audit.slice(0, args.limit ?? 100);
     default: {
-      const r = masters(command, args) ?? salesCommand(command, args) ?? (await purchaseCommand(command, args)) ?? (await statementCommand(command, args));
+      const r = masters(command, args) ?? salesCommand(command, args) ?? (await purchaseCommand(command, args)) ?? (await statementCommand(command, args)) ?? reportCommand(command, args);
       if (r !== undefined) return r;
       throw { code: "not_found", message: `Unknown command ${command}`, fields: [] } satisfies Fail;
     }

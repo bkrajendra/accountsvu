@@ -3,29 +3,35 @@ import { CircleCheck, CircleAlert } from "lucide-react";
 import clsx from "clsx";
 
 type Tone = "success" | "error";
+export interface ToastAction {
+  label: string;
+  onClick: () => void;
+}
 interface ToastItem {
   id: number;
   tone: Tone;
   message: string;
+  action?: ToastAction;
   leaving: boolean;
 }
 
-const ToastContext = createContext<(message: string, tone?: Tone) => void>(() => {});
+const ToastContext = createContext<(message: string, tone?: Tone, action?: ToastAction) => void>(() => {});
 
 /**
  * Completion/status feedback (apple-design §16). Toasts rise from the bottom
  * and leave the same way, using transitions (not keyframes) so rapid saves
- * retarget smoothly.
+ * retarget smoothly. A toast with an action stays longer so it can be used.
  */
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [items, setItems] = useState<ToastItem[]>([]);
   const next = useRef(1);
 
-  const show = useCallback((message: string, tone: Tone = "success") => {
+  const show = useCallback((message: string, tone: Tone = "success", action?: ToastAction) => {
     const id = next.current++;
-    setItems((xs) => [...xs.slice(-2), { id, tone, message, leaving: false }]);
-    window.setTimeout(() => setItems((xs) => xs.map((t) => (t.id === id ? { ...t, leaving: true } : t))), 3200);
-    window.setTimeout(() => setItems((xs) => xs.filter((t) => t.id !== id)), 3500);
+    const life = action ? 7000 : 3200;
+    setItems((xs) => [...xs.slice(-2), { id, tone, message, action, leaving: false }]);
+    window.setTimeout(() => setItems((xs) => xs.map((t) => (t.id === id ? { ...t, leaving: true } : t))), life);
+    window.setTimeout(() => setItems((xs) => xs.filter((t) => t.id !== id)), life + 300);
   }, []);
 
   return (
@@ -38,6 +44,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
             data-motion="slide"
             className={clsx(
               "toast flex items-center gap-2 rounded-full border border-line bg-surface px-4 py-2.5 text-[13px] font-medium shadow-raised",
+              t.action && "pointer-events-auto pr-2",
               t.leaving && "toast-leaving",
             )}
           >
@@ -47,6 +54,18 @@ export function ToastProvider({ children }: { children: ReactNode }) {
               <CircleAlert size={16} className="text-danger" aria-hidden />
             )}
             {t.message}
+            {t.action && (
+              <button
+                type="button"
+                className="pressable ml-1 rounded-full bg-accent-soft px-3 py-1 text-[12.5px] font-semibold text-accent hover:bg-accent-soft/70"
+                onClick={() => {
+                  t.action?.onClick();
+                  setItems((xs) => xs.map((x) => (x.id === t.id ? { ...x, leaving: true } : x)));
+                }}
+              >
+                {t.action.label}
+              </button>
+            )}
           </div>
         ))}
       </div>

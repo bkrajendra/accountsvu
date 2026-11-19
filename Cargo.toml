@@ -16,6 +16,7 @@ av-accounting = { path = "crates/accounting" }
 av-gst-engine = { path = "crates/gst-engine" }
 av-persistence = { path = "crates/persistence" }
 av-application = { path = "crates/application" }
+av-document-render = { path = "crates/document-render" }
 
 # external
 serde = { version = "1", features = ["derive"] }
@@ -31,12 +32,22 @@ tracing = "0.1"
 csv = "1.4"
 calamine = "0.38"
 sha2 = "0.10"
+argon2 = { version = "0.5", default-features = false, features = ["alloc"] }
+aes-gcm = "0.10"
+getrandom = "0.3"
+zeroize = "1"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
 
 [workspace.lints.clippy]
 float_arithmetic = "deny"   # money must never touch binary floating point
+
+# Key derivation is deliberately expensive; keep it fast in debug builds and tests.
+[profile.dev.package.argon2]
+opt-level = 3
+[profile.dev.package.blake2]
+opt-level = 3
 
 [profile.release]
 codegen-units = 1

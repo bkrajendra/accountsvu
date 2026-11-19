@@ -6,6 +6,10 @@
 //! install's organisation. The hosted API builds the context from the
 //! authenticated session instead.
 
+use av_application::reports::{
+    AgeingView, BalanceSheetView, BooksControlView, JournalRegisterView, LedgerView, LogoContent,
+    ProfitAndLossView, TrialBalanceView,
+};
 use av_application::{
     AppCore, AppError, AttachmentContent, BusinessProfile, DashboardSummary, FieldError,
     HealthInfo, ImportKind, ImportMapping, ImportPreview, ImportResult, ImportTable,
@@ -41,6 +45,44 @@ impl From<AppError> for CommandError {
             message: e.to_string(),
             fields: e.field_errors().to_vec(),
         }
+    }
+}
+
+impl CommandError {
+    pub fn new(code: &'static str, message: impl Into<String>) -> Self {
+        CommandError {
+            code,
+            message: message.into(),
+            fields: Vec::new(),
+        }
+    }
+
+    /// A validation error on one field.
+    pub fn field(field: &str, message: &str) -> Self {
+        CommandError {
+            code: "validation_failed",
+            message: "please correct the highlighted fields".into(),
+            fields: vec![FieldError {
+                field: field.into(),
+                message: message.into(),
+            }],
+        }
+    }
+
+    pub fn rename_field(mut self, from: &str, to: &str) -> Self {
+        for f in &mut self.fields {
+            if f.field == from {
+                f.field = to.into();
+            }
+        }
+        self
+    }
+
+    pub fn locked() -> Self {
+        CommandError::new(
+            "locked",
+            "AccountsVU is locked. Enter your PIN to continue.",
+        )
     }
 }
 
@@ -603,4 +645,130 @@ pub async fn undo_statement_import(
     Ok(core
         .undo_statement_import(&ctx(), &money_account_id, &batch)
         .await?)
+}
+
+// ---------------------------------------------------------------------------
+// Ledger and reports (Phase 1.6)
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub async fn trial_balance(
+    core: State<'_, AppCore>,
+    from: Option<String>,
+    to: Option<String>,
+) -> CmdResult<TrialBalanceView> {
+    Ok(core
+        .trial_balance(&ctx(), from.as_deref(), to.as_deref())
+        .await?)
+}
+
+#[tauri::command]
+pub async fn profit_and_loss(
+    core: State<'_, AppCore>,
+    from: String,
+    to: String,
+) -> CmdResult<ProfitAndLossView> {
+    Ok(core.profit_and_loss(&ctx(), &from, &to).await?)
+}
+
+#[tauri::command]
+pub async fn balance_sheet(core: State<'_, AppCore>, as_at: String) -> CmdResult<BalanceSheetView> {
+    Ok(core.balance_sheet(&ctx(), &as_at).await?)
+}
+
+#[tauri::command]
+pub async fn general_ledger(
+    core: State<'_, AppCore>,
+    account_id: String,
+    from: Option<String>,
+    to: Option<String>,
+) -> CmdResult<LedgerView> {
+    Ok(core
+        .general_ledger(&ctx(), &account_id, from.as_deref(), to.as_deref())
+        .await?)
+}
+
+#[tauri::command]
+pub async fn party_ledger(
+    core: State<'_, AppCore>,
+    party_id: String,
+    from: Option<String>,
+    to: Option<String>,
+) -> CmdResult<LedgerView> {
+    Ok(core
+        .party_ledger(&ctx(), &party_id, from.as_deref(), to.as_deref())
+        .await?)
+}
+
+#[tauri::command]
+pub async fn journal_register(
+    core: State<'_, AppCore>,
+    from: Option<String>,
+    to: Option<String>,
+) -> CmdResult<JournalRegisterView> {
+    Ok(core
+        .journal_register(&ctx(), from.as_deref(), to.as_deref())
+        .await?)
+}
+
+#[tauri::command]
+pub async fn ageing(
+    core: State<'_, AppCore>,
+    kind: String,
+    as_of: String,
+) -> CmdResult<AgeingView> {
+    Ok(core.ageing(&ctx(), &kind, &as_of).await?)
+}
+
+#[tauri::command]
+pub async fn books_control(core: State<'_, AppCore>) -> CmdResult<BooksControlView> {
+    Ok(core.books_control(&ctx()).await?)
+}
+
+#[tauri::command]
+pub async fn set_books_lock(
+    core: State<'_, AppCore>,
+    until: Option<String>,
+    reason: Option<String>,
+) -> CmdResult<BooksControlView> {
+    Ok(core
+        .set_books_lock(&ctx(), until.as_deref(), reason.as_deref())
+        .await?)
+}
+
+#[tauri::command]
+pub async fn close_financial_year(
+    core: State<'_, AppCore>,
+    code: String,
+) -> CmdResult<BooksControlView> {
+    Ok(core.close_financial_year(&ctx(), &code).await?)
+}
+
+#[tauri::command]
+pub async fn reopen_financial_year(
+    core: State<'_, AppCore>,
+    code: String,
+    reason: String,
+) -> CmdResult<BooksControlView> {
+    Ok(core.reopen_financial_year(&ctx(), &code, &reason).await?)
+}
+
+/// The image's bytes arrive as a JSON array; the core caps logos at 1 MB.
+#[tauri::command]
+pub async fn set_logo(
+    core: State<'_, AppCore>,
+    file_name: String,
+    bytes: Vec<u8>,
+) -> CmdResult<LogoContent> {
+    Ok(core.set_logo(&ctx(), &file_name, &bytes).await?)
+}
+
+#[tauri::command]
+pub async fn get_logo(core: State<'_, AppCore>) -> CmdResult<Option<LogoContent>> {
+    Ok(core.logo(&ctx()).await?)
+}
+
+#[tauri::command]
+pub async fn remove_logo(core: State<'_, AppCore>) -> CmdResult<()> {
+    Ok(core.remove_logo(&ctx()).await?)
 }

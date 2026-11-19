@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "react-router";
 import clsx from "clsx";
-import { ArrowLeft, Ban, FilePlus2, Loader2, Pencil, Trash2 } from "lucide-react";
+import { ArrowLeft, Ban, FileDown, FilePlus2, Loader2, Pencil, Printer, Trash2 } from "lucide-react";
 import { api, keys, type SalesDocumentView } from "../../lib/api";
 import { formatPaise, formatRate } from "../../lib/format";
 import { stateName } from "../../lib/gst";
@@ -12,11 +12,14 @@ import { Badge, Button, Card } from "../../components/ui";
 import { Dialog } from "../../components/Dialog";
 import { Field, TextInput } from "../../components/form";
 import { SettlementsCard } from "../banking/Settlements";
+import { useLogoUrl } from "../../lib/logo";
+import { useToast } from "../../components/Toast";
 
 export function SalesDocument() {
   const { id = "" } = useParams();
   const { data: doc } = useQuery({ queryKey: keys.salesDocument(id), queryFn: () => api.getSalesDocument(id) });
   const { data: profile } = useQuery({ queryKey: keys.profile, queryFn: api.businessProfile });
+  const logoUrl = useLogoUrl();
   const [cancelling, setCancelling] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const navigate = useNavigate();
@@ -45,6 +48,7 @@ export function SalesDocument() {
           <Badge tone={status.tone}>{status.label}</Badge>
         </div>
         <div className="flex gap-2">
+          <PdfActions id={doc.id} draft={doc.status === "draft"} />
           {doc.status === "draft" && (
             <>
               <Button onClick={() => setDeleting(true)}>
@@ -71,13 +75,16 @@ export function SalesDocument() {
       </div>
 
       <div className="grid grid-cols-[1fr_280px] items-start gap-5">
-        <Card className="p-8">
+        <Card className="paper p-8">
           <div className="flex items-start justify-between gap-6 border-b border-line pb-6">
-            <div>
+            <div className="flex items-start gap-4">
+              {logoUrl && <img src={logoUrl} alt="" className="max-h-14 max-w-[140px] shrink-0 object-contain" />}
+              <div>
               <div className="text-[17px] font-semibold">{org?.tradeName ?? org?.legalName}</div>
               {org?.tradeName && <div className="text-[12.5px] text-muted">{org.legalName}</div>}
               <div className="mt-1 text-[12.5px] text-muted">{[org?.addressLine1, org?.city, org?.pincode].filter(Boolean).join(", ")}</div>
               {reg && <div className="num mt-1 text-[12.5px]">GSTIN {reg.gstin}</div>}
+              </div>
             </div>
             <div className="text-right">
               <div className="text-[12px] font-semibold uppercase tracking-[0.08em] text-accent">{DOC_TYPE_LABEL[doc.docType]}</div>
@@ -191,15 +198,43 @@ export function SalesDocument() {
               )}
             </Card>
           )}
-          <Card className="p-4 text-[12.5px] text-muted">
-            PDF and printing arrive with the invoice layout in Phase 1.7.
-          </Card>
         </div>
       </div>
 
       {cancelling && <CancelDialog doc={doc} onClose={() => setCancelling(false)} />}
       {deleting && <DeleteDialog doc={doc} onClose={() => setDeleting(false)} />}
     </div>
+  );
+}
+
+/** Save the PDF, or open it in the default viewer to print. Drafts print with a DRAFT watermark. */
+function PdfActions({ id, draft }: { id: string; draft: boolean }) {
+  const toast = useToast();
+  const [busy, setBusy] = useState<null | "save" | "open">(null);
+  const run = async (kind: "save" | "open") => {
+    setBusy(kind);
+    try {
+      if (kind === "open") {
+        await api.openSalesPdf(id);
+      } else {
+        const f = await api.saveSalesPdf(id);
+        if (f) toast(`Saved ${f.fileName}`, "success", { label: "Show in folder", onClick: () => void api.openSavedFile(f.path) });
+      }
+    } catch (e) {
+      toast(e instanceof Error ? e.message : String(e), "error");
+    } finally {
+      setBusy(null);
+    }
+  };
+  return (
+    <>
+      <Button disabled={!!busy} onClick={() => void run("open")} title={draft ? "Opens with a DRAFT watermark" : "Open in your PDF viewer to print"}>
+        {busy === "open" ? <Loader2 size={15} className="animate-spin" /> : <Printer size={15} />} Print
+      </Button>
+      <Button disabled={!!busy} onClick={() => void run("save")}>
+        {busy === "save" ? <Loader2 size={15} className="animate-spin" /> : <FileDown size={15} />} Save PDF
+      </Button>
+    </>
   );
 }
 

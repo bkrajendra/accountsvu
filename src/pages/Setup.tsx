@@ -1,4 +1,5 @@
 import { useRef, useState, type ReactNode } from "react";
+import { RestoreDialog } from "./settings/RestoreDialog";
 import { useNavigate, Navigate } from "react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
@@ -76,6 +77,7 @@ export function Setup() {
 
   const fy = profile?.currentFinancialYear;
   const [step, setStep] = useState(0);
+  const [restoring, setRestoring] = useState(false);
   const direction = useRef<"forward" | "back">("forward");
   const [errors, setErrors] = useState<Errors>({});
   const [formError, setFormError] = useState<string | null>(null);
@@ -213,8 +215,12 @@ export function Setup() {
 
         <h1 className="text-display">Set up your business</h1>
         <p className="mt-1.5 text-[14px] text-muted">
-          Four short steps. Everything stays on this computer, and you can change it later in Settings.
+          Four short steps. Everything stays on this computer, and you can change it later in Settings.{" "}
+          <button type="button" className="text-accent hover:underline" onClick={() => setRestoring(true)}>
+            Restore from a backup instead
+          </button>
         </p>
+        {restoring && <RestoreDialog freshInstall onClose={() => setRestoring(false)} />}
 
         <Stepper step={step} onJump={(i) => i < step && go(i)} />
 

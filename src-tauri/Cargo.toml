@@ -18,11 +18,13 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 av-application.workspace = true
 av-persistence.workspace = true
+chrono.workspace = true
 tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
 serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
+tauri-plugin-dialog = "2"
 
 [lints]
 workspace = true

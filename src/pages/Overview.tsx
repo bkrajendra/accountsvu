@@ -19,6 +19,7 @@ import {
 import clsx from "clsx";
 import { api, keys, type MoneyString } from "../lib/api";
 import { formatInr, greeting, monthBounds, monthLabel } from "../lib/format";
+import { shortDate } from "../lib/sales";
 import { Badge, Button, Card, PageHeader } from "../components/ui";
 
 // The entrance plays once per app launch — the overview is revisited often,
@@ -38,6 +39,8 @@ export function Overview() {
   const animate = !hasAnimated;
   hasAnimated = true;
   const configured = data?.organisationConfigured ?? true;
+  const { data: backup } = useQuery({ queryKey: keys.backupStatus, queryFn: api.backupStatus, enabled: configured });
+  const { data: books } = useQuery({ queryKey: keys.booksControl, queryFn: api.booksControl, enabled: configured });
 
   const cards: { label: string; value?: MoneyString; icon: LucideIcon; hint: string; estimate?: boolean }[] = [
     { label: "Sales this month", value: data?.salesThisMonth, icon: Receipt, hint: monthLabel() },
@@ -157,13 +160,22 @@ export function Overview() {
               detail="Import your 2B statement to reconcile input tax credit."
               status={<Badge>Phase 2</Badge>}
             />
-            <ActionRow
-              icon={HardDriveDownload}
-              tone="warning"
-              title="No backup yet"
-              detail="Encrypted backups arrive with Phase 1.7. Keep your data folder safe meanwhile."
-              status={<Badge tone="warning" icon={<AlertTriangle size={11} />}>Attention</Badge>}
-            />
+            {configured && backup && (
+              <ActionRow
+                icon={HardDriveDownload}
+                tone={backup.due ? "warning" : "neutral"}
+                title={backup.lastBackup ? (backup.due ? `Last backup ${backup.daysSinceBackup} days ago` : "Backed up") : "No backup yet"}
+                detail={
+                  backup.lastBackup
+                    ? backup.due
+                      ? "Make a fresh encrypted backup and keep it off this computer."
+                      : `Last backup ${backup.daysSinceBackup === 0 ? "today" : backup.daysSinceBackup === 1 ? "yesterday" : `${backup.daysSinceBackup} days ago`}.`
+                    : "Make an encrypted backup and keep it off this computer."
+                }
+                status={backup.due ? <Badge tone="warning" icon={<AlertTriangle size={11} />}>Attention</Badge> : <Badge tone="success">Done</Badge>}
+                onClick={() => navigate("/settings?tab=security")}
+              />
+            )}
           </ul>
         </Card>
 
@@ -173,7 +185,7 @@ export function Overview() {
             <HealthRow ok label="Journals balance" />
             <HealthRow ok label="Posted entries are immutable" />
             <HealthRow ok label="Data stored on this computer" />
-            <HealthRow label="Period lock not yet configured" />
+            {books?.lock ? <HealthRow ok label={`Books locked up to ${shortDate(books.lock.lockedUntil)}`} /> : <HealthRow label="Period lock not set" />}
           </ul>
           <p className="mt-5 flex gap-2 rounded-xl bg-surface-2 p-3 text-[12.5px] text-muted">
             <Info size={15} className="mt-px shrink-0 text-subtle" aria-hidden />

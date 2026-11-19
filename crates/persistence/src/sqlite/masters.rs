@@ -342,6 +342,15 @@ impl JournalRepo for SqliteUow {
         Ok(())
     }
 
+    async fn books_locked_until(&mut self, org_id: &str) -> DbResult<Option<String>> {
+        Ok(
+            sqlx::query_scalar("SELECT locked_until FROM books_lock WHERE organisation_id = ?1")
+                .bind(org_id)
+                .fetch_optional(self.c())
+                .await?,
+        )
+    }
+
     async fn party_balances(&mut self, org_id: &str) -> DbResult<Vec<(String, i64)>> {
         Ok(sqlx::query_as(
             "SELECT l.party_id, SUM(l.debit_paise - l.credit_paise)

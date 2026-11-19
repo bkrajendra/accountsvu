@@ -20,8 +20,8 @@ export function useSave<TInput, TResult>(
     mutationFn: fn,
     onMutate: () => setFieldErrors({}),
     onSuccess: (r) => {
-      for (const k of [...opts.invalidate, ["audit"], ["dashboard"]]) void qc.invalidateQueries({ queryKey: k });
-      toast(opts.success);
+      for (const k of [...opts.invalidate, ["audit"], ["dashboard"], ["report"]]) void qc.invalidateQueries({ queryKey: k });
+      if (opts.success) toast(opts.success);
       opts.onSuccess?.(r);
     },
     onError: (e) => {

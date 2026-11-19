@@ -1,0 +1,75 @@
+{
+  "title": "Credit note",
+  "number": "CN/25-26/0003",
+  "watermark": null,
+  "date": "20 Nov 2026",
+  "due": null,
+  "seller": {
+    "name": "Khope Traders",
+    "subtitle": "Khope Traders Private Limited",
+    "lines": [
+      "12 MG Road, Kothrud",
+      "Pune 411038, Maharashtra",
+      "GSTIN 27AAPFU0939F1ZV",
+      "accounts@khope.example · 98200 00000"
+    ]
+  },
+  "buyer": {
+    "name": "Deccan Hardware LLP",
+    "subtitle": null,
+    "lines": [
+      "Plot 7, Peenya Industrial Area, Bengaluru 560058",
+      "GSTIN 29AAACD1234E1Z2"
+    ]
+  },
+  "place": "Karnataka (29)",
+  "supply": "Between states · IGST",
+  "flags": [
+    "Tax payable on reverse charge: No"
+  ],
+  "against": "INV/25-26/0040 dated 2 Nov 2026",
+  "reason": "Two racks returned damaged in transit",
+  "notes": null,
+  "lines": [
+    {
+      "no": "1",
+      "description": "Steel rack, 5 shelves",
+      "discount": null,
+      "hsn": "94032090",
+      "qty": "2 NOS",
+      "rate": "₹4,500.00",
+      "gst": "18%",
+      "taxable": "₹9,000.00"
+    }
+  ],
+  "tax_rows": [
+    {
+      "rate": "18%",
+      "taxable": "₹9,000.00",
+      "cgst": "₹0.00",
+      "sgst": "₹0.00",
+      "igst": "₹1,620.00",
+      "cess": "₹0.00"
+    }
+  ],
+  "state_tax": "SGST",
+  "show_cgst": false,
+  "show_igst": true,
+  "show_cess": false,
+  "totals": [
+    [
+      "Taxable value",
+      "₹9,000.00"
+    ],
+    [
+      "IGST",
+      "₹1,620.00"
+    ]
+  ],
+  "total": "₹10,620.00",
+  "words": "Rupees ten thousand six hundred twenty only",
+  "sign_for": "For Khope Traders",
+  "signatory": null,
+  "logo": "/logo.svg",
+  "footer": "Credit note CN/25-26/0003 · Khope Traders"
+}

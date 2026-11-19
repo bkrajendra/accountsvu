@@ -58,7 +58,6 @@ export const primaryNav: NavItem[] = [
     label: "Reports",
     icon: BarChart3,
     summary: "Registers, ledgers, trial balance, profit & loss and ageing — every figure drills down to its source.",
-    phase: "Phase 1.6",
   },
   {
     path: "/gst",

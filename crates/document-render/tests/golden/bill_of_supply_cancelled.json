@@ -1,0 +1,83 @@
+{
+  "title": "Bill of supply",
+  "number": "INV/25-26/0042",
+  "watermark": "CANCELLED",
+  "date": "19 Nov 2026",
+  "due": "19 Dec 2026",
+  "seller": {
+    "name": "Khope Traders",
+    "subtitle": "Khope Traders Private Limited",
+    "lines": [
+      "12 MG Road, Kothrud",
+      "Pune 411038, Maharashtra",
+      "GSTIN 27AAPFU0939F1ZV",
+      "accounts@khope.example · 98200 00000"
+    ]
+  },
+  "buyer": {
+    "name": "Sahyadri Stores",
+    "subtitle": null,
+    "lines": [
+      "Shop 4, Station Road",
+      "Nashik 422001",
+      "GSTIN 27ABCDE1234F1Z5"
+    ]
+  },
+  "place": "Maharashtra (27)",
+  "supply": "Within the state · CGST + SGST",
+  "flags": [
+    "Tax payable on reverse charge: No"
+  ],
+  "against": null,
+  "reason": null,
+  "notes": "Bank: HDFC Bank, A/c 50100012345678, IFSC HDFC0001234.\nThank you for your business.",
+  "lines": [
+    {
+      "no": "1",
+      "description": "Steel rack, 5 shelves",
+      "discount": "Less discount ₹500.00",
+      "hsn": "94032090",
+      "qty": "2 NOS",
+      "rate": "₹4,500.00",
+      "gst": "Exempt",
+      "taxable": "₹8,500.00"
+    },
+    {
+      "no": "2",
+      "description": "Installation and setup",
+      "discount": null,
+      "hsn": "998719",
+      "qty": "1",
+      "rate": "₹1,500.50",
+      "gst": "Exempt",
+      "taxable": "₹1,500.50"
+    },
+    {
+      "no": "3",
+      "description": "Packing material",
+      "discount": null,
+      "hsn": "48191010",
+      "qty": "10 BOX",
+      "rate": "₹45.25",
+      "gst": "Exempt",
+      "taxable": "₹452.50"
+    }
+  ],
+  "tax_rows": [],
+  "state_tax": "SGST",
+  "show_cgst": false,
+  "show_igst": false,
+  "show_cess": false,
+  "totals": [
+    [
+      "Taxable value",
+      "₹10,453.00"
+    ]
+  ],
+  "total": "₹10,453.00",
+  "words": "Rupees ten thousand four hundred fifty-three only",
+  "sign_for": "For Khope Traders",
+  "signatory": "Rajendra Khope",
+  "logo": null,
+  "footer": "Bill of supply INV/25-26/0042 · Khope Traders"
+}

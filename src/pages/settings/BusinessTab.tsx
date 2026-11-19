@@ -8,6 +8,7 @@ import { useSave } from "../../lib/mutations";
 import { Button, Card } from "../../components/ui";
 import { Field, FormGrid, Select, TextInput, Toggle } from "../../components/form";
 import { SettingsSection } from "./SettingsSection";
+import { LogoSection } from "./LogoSection";
 
 function toInput(o: Organisation): OrganisationInput {
   return {
@@ -124,6 +125,8 @@ export function BusinessTab() {
           </FormGrid>
         </Card>
       </SettingsSection>
+
+      <LogoSection />
 
       <SettingsSection title="Address & contact" description="Printed on invoices.">
         <Card className="p-5">

@@ -19,6 +19,10 @@ use crate::records::{
     PurchaseLineRecord, RegistrationRecord, SalesDocumentRecord, SalesLineRecord, SeriesRecord,
     StatementLineRecord, VoucherAllocationRecord,
 };
+use crate::records::{
+    AccountTotalsRecord, AgeingDocRecord, BackupLogRecord, BooksLockRecord, FyCloseRecord,
+    JournalRowRecord, LogoRecord,
+};
 
 pub type DbResult<T> = Result<T, DbError>;
 
@@ -35,6 +39,10 @@ pub trait Store: Send + Sync + 'static {
 
     /// Highest applied schema migration.
     fn schema_version(&self) -> impl Future<Output = DbResult<i64>> + Send;
+
+    /// Write a consistent copy of the whole database to `dest` (which must
+    /// not exist yet), without blocking other readers. Used for backups.
+    fn snapshot(&self, dest: &std::path::Path) -> impl Future<Output = DbResult<()>> + Send;
 }
 
 /// One transaction spanning every repository.
@@ -52,6 +60,8 @@ pub trait UnitOfWork:
     + PurchaseRepo
     + AttachmentRepo
     + BankingRepo
+    + ReportRepo
+    + BackupRepo
     + Send
 {
     fn commit(self) -> impl Future<Output = DbResult<()>> + Send;
@@ -284,6 +294,12 @@ pub trait JournalRepo {
         entry: &JournalEntryRecord,
         lines: &[JournalLineRecord],
     ) -> impl Future<Output = DbResult<()>> + Send;
+    /// The last locked date, if the books are locked: nothing may be posted
+    /// on or before it.
+    fn books_locked_until(
+        &mut self,
+        org_id: &str,
+    ) -> impl Future<Output = DbResult<Option<String>>> + Send;
     /// Net balance (debit − credit, paise) per party across all postings.
     fn party_balances(
         &mut self,
@@ -577,4 +593,85 @@ pub trait BankingRepo {
         money_account_id: &str,
         batch: &str,
     ) -> impl Future<Output = DbResult<u64>> + Send;
+}
+
+/// Reports, period lock, year-end close and the business logo (Phase 1.6).
+pub trait ReportRepo {
+    /// Every account with its balance before `from` and its debits/credits
+    /// within `[from, to]`. Entries whose source type is `exclude_source`
+    /// (e.g. the year-end close) are left out.
+    fn account_totals(
+        &mut self,
+        org_id: &str,
+        from: Option<&str>,
+        to: Option<&str>,
+        exclude_source: Option<&str>,
+    ) -> impl Future<Output = DbResult<Vec<AccountTotalsRecord>>> + Send;
+    /// Journal lines dated within `[from, to]`, oldest first, at most `limit`.
+    fn journal_rows(
+        &mut self,
+        org_id: &str,
+        from: Option<&str>,
+        to: Option<&str>,
+        limit: i64,
+    ) -> impl Future<Output = DbResult<Vec<JournalRowRecord>>> + Send;
+    /// Each entry's net effect on one party within `[from, to]`.
+    fn party_book(
+        &mut self,
+        org_id: &str,
+        party_id: &str,
+        from: Option<&str>,
+        to: Option<&str>,
+    ) -> impl Future<Output = DbResult<Vec<BookLineRecord>>> + Send;
+    /// A party's net balance (debit − credit) for entries dated up to `to`.
+    fn party_balance_until(
+        &mut self,
+        org_id: &str,
+        party_id: &str,
+        to: Option<&str>,
+    ) -> impl Future<Output = DbResult<i64>> + Send;
+    /// Issued invoices (`sales`) or recorded credit bills (`purchase`) dated
+    /// on or before `as_of` with something outstanding.
+    fn outstanding_documents(
+        &mut self,
+        org_id: &str,
+        document_kind: &str,
+        as_of: &str,
+    ) -> impl Future<Output = DbResult<Vec<AgeingDocRecord>>> + Send;
+
+    fn get_books_lock(
+        &mut self,
+        org_id: &str,
+    ) -> impl Future<Output = DbResult<Option<BooksLockRecord>>> + Send;
+    fn set_books_lock(&mut self, l: &BooksLockRecord) -> impl Future<Output = DbResult<()>> + Send;
+    fn clear_books_lock(&mut self, org_id: &str) -> impl Future<Output = DbResult<()>> + Send;
+
+    fn list_fy_closes(
+        &mut self,
+        org_id: &str,
+    ) -> impl Future<Output = DbResult<Vec<FyCloseRecord>>> + Send;
+    fn insert_fy_close(&mut self, c: &FyCloseRecord) -> impl Future<Output = DbResult<()>> + Send;
+    /// Record a reopening (status and reopen fields only).
+    fn update_fy_close(&mut self, c: &FyCloseRecord) -> impl Future<Output = DbResult<()>> + Send;
+
+    fn get_logo(
+        &mut self,
+        org_id: &str,
+    ) -> impl Future<Output = DbResult<Option<LogoRecord>>> + Send;
+    fn set_logo(&mut self, l: &LogoRecord) -> impl Future<Output = DbResult<()>> + Send;
+    fn delete_logo(&mut self, org_id: &str) -> impl Future<Output = DbResult<()>> + Send;
+}
+
+/// Backup history (Phase 1.7).
+pub trait BackupRepo {
+    fn insert_backup_log(
+        &mut self,
+        r: &BackupLogRecord,
+    ) -> impl Future<Output = DbResult<()>> + Send;
+    /// Most recent entry of `kind` ('backup' or 'restore').
+    fn last_backup_log(
+        &mut self,
+        org_id: &str,
+        kind: &str,
+    ) -> impl Future<Output = DbResult<Option<BackupLogRecord>>> + Send;
 }
