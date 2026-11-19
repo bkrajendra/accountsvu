@@ -1,9 +1,42 @@
-# AccountsVU — Small Business Accounting & GST
+<div align="center">
+
+<img src="docs/brand-kit/app-icon-1024.png" alt="AccountsVU logo" width="120" />
+
+# AccountsVU
+
+**Small business accounting & GST, on your own computer.**
 
 Local-first desktop accounting for Indian micro and small businesses: invoicing, purchases, double-entry books and guided GST returns.
 
-- **Spec:** [docs/accountsvu-spec.md](docs/accountsvu-spec.md) (v0.2, decisions in §12)
-- **Plan and phase status:** [docs/implementation-plan.md](docs/implementation-plan.md)
+[![Release build](https://github.com/bkrajendra/accountsvu/actions/workflows/release.yml/badge.svg?branch=main)](https://github.com/bkrajendra/accountsvu/actions/workflows/release.yml)
+[![Latest release](https://img.shields.io/github/v/release/bkrajendra/accountsvu?label=release&color=0A84FF)](https://github.com/bkrajendra/accountsvu/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/bkrajendra/accountsvu/total?color=0A84FF)](https://github.com/bkrajendra/accountsvu/releases)
+[![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)](https://github.com/bkrajendra/accountsvu/releases/latest)
+<br />
+[![Tauri 2](https://img.shields.io/badge/Tauri-2-24C8DB?logo=tauri&logoColor=white)](https://tauri.app)
+[![Rust](https://img.shields.io/badge/Rust-2024-000000?logo=rust&logoColor=white)](https://www.rust-lang.org)
+[![React 19](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)](https://react.dev)
+[![SQLite](https://img.shields.io/badge/SQLite-local-003B57?logo=sqlite&logoColor=white)](https://www.sqlite.org)
+
+[Download](https://github.com/bkrajendra/accountsvu/releases/latest) · [Spec](docs/accountsvu-spec.md) · [Roadmap](docs/implementation-plan.md)
+
+<img src="docs/screenshots/overview.webp" alt="AccountsVU overview screen" width="900" />
+
+</div>
+
+## Features
+
+- **Sales and purchases:** GST invoices, credit and debit notes, bills with input tax credit, and print-ready PDF invoices with your logo.
+- **Double-entry books:** balanced journals, immutable posted entries, reversals, cash and bank books, bank statement import and reconciliation.
+- **GST built in:** CGST/SGST/UTGST/IGST split, place of supply, reverse charge and rate-wise tax breakup; guided GSTR-1 and GSTR-3B returns are next on the roadmap.
+- **Reports:** trial balance, profit and loss, balance sheet, general ledger, party statements and receivables/payables ageing.
+- **Your data stays with you:** a local SQLite database, encrypted backups (AES-256-GCM, Argon2id) with verified restore, and an optional PIN lock.
+
+## Install
+
+Download the installer for your system from the [latest release](https://github.com/bkrajendra/accountsvu/releases/latest): `.msi` / `.exe` for Windows, `.dmg` for macOS (Apple silicon or Intel), and `.AppImage` / `.deb` / `.rpm` for Linux.
+
+> The macOS build is not notarised yet. On first launch, open **System Settings › Privacy & Security** and click **Open Anyway**.
 
 ## Stack
 
