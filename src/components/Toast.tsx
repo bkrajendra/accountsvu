@@ -1,8 +1,8 @@
 import { createContext, useCallback, useContext, useRef, useState, type ReactNode } from "react";
-import { CircleCheck, CircleAlert } from "lucide-react";
+import { CircleCheck, CircleAlert, Download } from "lucide-react";
 import clsx from "clsx";
 
-type Tone = "success" | "error";
+type Tone = "success" | "error" | "info";
 export interface ToastAction {
   label: string;
   onClick: () => void;
@@ -28,7 +28,8 @@ export function ToastProvider({ children }: { children: ReactNode }) {
 
   const show = useCallback((message: string, tone: Tone = "success", action?: ToastAction) => {
     const id = next.current++;
-    const life = action ? 7000 : 3200;
+    // Info toasts (e.g. "update available") carry a choice, so they stay longest.
+    const life = action ? (tone === "info" ? 12000 : 7000) : 3200;
     setItems((xs) => [...xs.slice(-2), { id, tone, message, action, leaving: false }]);
     window.setTimeout(() => setItems((xs) => xs.map((t) => (t.id === id ? { ...t, leaving: true } : t))), life);
     window.setTimeout(() => setItems((xs) => xs.filter((t) => t.id !== id)), life + 300);
@@ -50,6 +51,8 @@ export function ToastProvider({ children }: { children: ReactNode }) {
           >
             {t.tone === "success" ? (
               <CircleCheck size={16} className="text-success" aria-hidden />
+            ) : t.tone === "info" ? (
+              <Download size={16} className="text-accent" aria-hidden />
             ) : (
               <CircleAlert size={16} className="text-danger" aria-hidden />
             )}

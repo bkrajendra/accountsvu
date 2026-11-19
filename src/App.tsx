@@ -25,6 +25,7 @@ import { AgeingPage, GeneralLedgerPage, JournalPage, PartyLedgerPage } from "./p
 import { Setup } from "./pages/Setup";
 import { ToastProvider } from "./components/Toast";
 import { SessionGate } from "./lib/session";
+import { UpdateHost, UpdaterProvider } from "./lib/updater";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -79,9 +80,12 @@ export default function App() {
     <ThemeProvider>
       <QueryClientProvider client={queryClient}>
         <ToastProvider>
-          <SessionGate>
-            <RouterProvider router={router} />
-          </SessionGate>
+          <UpdaterProvider>
+            <SessionGate>
+              <RouterProvider router={router} />
+              <UpdateHost />
+            </SessionGate>
+          </UpdaterProvider>
         </ToastProvider>
       </QueryClientProvider>
     </ThemeProvider>

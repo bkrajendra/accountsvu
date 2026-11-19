@@ -1,5 +1,5 @@
-import { invoke, isTauri } from "@tauri-apps/api/core";
-import { previewBackend } from "./preview";
+import { Channel, invoke, isTauri } from "@tauri-apps/api/core";
+import { previewBackend, previewInstallUpdate } from "./preview";
 
 /** Money crosses IPC as a decimal string (never a JS float) — see crates/domain/src/money.rs. */
 export type MoneyString = string;
@@ -1217,6 +1217,20 @@ export interface AppSession {
 
 export const IDLE_CHOICES = [0, 1, 5, 15, 30, 60] as const;
 
+export interface UpdateInfo {
+  currentVersion: string;
+  version: string;
+  date: string | null;
+  notes: string | null;
+  /** False where the app can't replace itself (Linux .deb/.rpm). */
+  canInstall: boolean;
+}
+
+export type UpdateProgress =
+  | { event: "started"; contentLength: number | null }
+  | { event: "progress"; downloaded: number }
+  | { event: "finished" };
+
 /** Fired when the host reports the app is locked. */
 export const LOCKED_EVENT = "accountsvu:locked";
 
@@ -1372,6 +1386,19 @@ export const api = {
   cancelRestore: () => call<null>("cancel_restore"),
 
   appSession: () => call<AppSession>("app_session"),
+
+  checkUpdate: () => call<UpdateInfo | null>("check_update"),
+  /** Downloads, installs and restarts; resolves only if something went wrong in preview. */
+  installUpdate: (onProgress: (p: UpdateProgress) => void) => {
+    if (!runningInTauri)
+      return previewInstallUpdate(onProgress).catch((e: ConstructorParameters<typeof ApiError>[0]) => {
+        throw new ApiError(e);
+      });
+    const channel = new Channel<UpdateProgress>();
+    channel.onmessage = onProgress;
+    return call<void>("install_update", { onProgress: channel });
+  },
+  openReleasesPage: () => call<void>("open_releases_page"),
   lockApp: () => call<LockStatus>("lock_app"),
   unlockApp: (pin: string) => call<LockStatus>("unlock_app", { pin }),
   unlockWithRecovery: (code: string) => call<LockStatus>("unlock_with_recovery", { code }),

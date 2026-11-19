@@ -146,11 +146,17 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       # Uploads the installers to the release, replacing same-named assets
-      # from an earlier build of this version.
+      # from an earlier build of this version. With the signing key it also
+      # signs the update bundles and merges this platform into latest.json,
+      # which the app's updater reads (releases/latest/download/latest.json).
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           releaseId: ${{ needs.prepare.outputs.release_id }}
           tagName: ${{ needs.prepare.outputs.tag }}
           args: ${{ matrix.args }}
+          # Windows updates use the per-user NSIS installer (no admin prompt).
+          updaterJsonPreferNsis: true

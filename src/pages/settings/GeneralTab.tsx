@@ -1,10 +1,11 @@
 import type { ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import clsx from "clsx";
-import { Check } from "lucide-react";
+import { Check, Download, Loader2, RefreshCw } from "lucide-react";
 import { api, keys, runningInTauri } from "../../lib/api";
 import { useTheme, type ThemePreference } from "../../lib/theme";
-import { Badge, Card } from "../../components/ui";
+import { Badge, Button, Card } from "../../components/ui";
+import { useUpdater } from "../../lib/updater";
 import { SettingsSection as Section } from "./SettingsSection";
 
 export function GeneralTab() {
@@ -19,7 +20,8 @@ export function GeneralTab() {
       <Section title="About" description="Version and storage details for support.">
         <Card>
           <dl className="divide-y divide-line text-[13.5px]">
-            <Row label="App version" value={health?.appVersion ?? "—"} />
+            <Row label="Installed version" value={health?.appVersion ?? "—"} />
+            <UpdateRow />
             <Row label="Database schema" value={health ? `v${health.schemaVersion}` : "—"} />
             <Row label="Data file" value={<span className="selectable break-all">{health?.database ?? "—"}</span>} />
             <Row
@@ -31,6 +33,55 @@ export function GeneralTab() {
       </Section>
     </>
   );
+}
+
+function UpdateRow() {
+  const { phase, info, checkedAt, error, progress, check, openDialog } = useUpdater();
+  if (!runningInTauri && phase === "idle") return null;
+  const busy = phase === "downloading" || phase === "installing";
+  const checked = checkedAt ? checkedAt.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : null;
+
+  let value: ReactNode;
+  if (phase === "checking" || phase === "idle") {
+    value = (
+      <span className="inline-flex items-center gap-2 text-muted">
+        <Loader2 size={14} className="animate-spin" /> Checking…
+      </span>
+    );
+  } else if (info && (phase === "available" || busy || phase === "error")) {
+    const pct = progress?.total ? Math.round((progress.downloaded / progress.total) * 100) : null;
+    value = (
+      <span className="inline-flex items-center gap-3">
+        <Badge tone="accent">{info.version} available</Badge>
+        <Button variant="primary" className="h-8" onClick={openDialog}>
+          {busy ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
+          {busy ? (pct !== null ? `Downloading ${pct}%` : "Updating…") : "Update"}
+        </Button>
+      </span>
+    );
+  } else if (phase === "error") {
+    value = (
+      <span className="inline-flex items-center gap-3">
+        <span className="font-normal text-danger">{error ?? "Couldn't check for updates."}</span>
+        <Button className="h-8" onClick={() => void check()}>
+          <RefreshCw size={14} /> Try again
+        </Button>
+      </span>
+    );
+  } else {
+    value = (
+      <span className="inline-flex items-center gap-3">
+        <Badge tone="success" icon={<Check size={12} strokeWidth={3} />}>
+          Up to date
+        </Badge>
+        {checked && <span className="font-normal text-muted">checked {checked}</span>}
+        <Button className="h-8" onClick={() => void check()}>
+          <RefreshCw size={14} /> Check again
+        </Button>
+      </span>
+    );
+  }
+  return <Row label="Latest version" value={value} />;
 }
 
 function Row({ label, value }: { label: string; value: ReactNode }) {

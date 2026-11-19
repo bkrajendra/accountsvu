@@ -3,6 +3,7 @@
 
 mod commands;
 mod host;
+mod updater;
 
 use std::sync::Mutex;
 
@@ -105,11 +106,15 @@ pub fn run() {
         host::verify_backup,
         host::apply_restore,
         host::cancel_restore,
+        updater::check_update,
+        updater::install_update,
+        updater::open_releases_page,
     ];
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             let data_dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&data_dir)?;
@@ -142,6 +147,7 @@ pub fn run() {
             app.manage(host::StartupNotice(Mutex::new(kept_name)));
             app.manage(host::SavedFiles::default());
             app.manage(host::RestoreState::default());
+            app.manage(updater::PendingUpdate::default());
             Ok(())
         })
         // Every command passes the app lock first: while locked, only the

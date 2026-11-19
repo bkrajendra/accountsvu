@@ -1775,6 +1775,16 @@ function hostCommand(command: string, args: Record<string, any>): unknown {
     case "apply_restore":
       if (!restoreChecked) throw { code: "conflict", message: "Check the backup with its passphrase first.", fields: [] } satisfies Fail;
       throw { code: "invalid_input", message: "The browser preview can't restart. Restoring runs in the desktop app.", fields: [] } satisfies Fail;
+    case "check_update":
+      return {
+        currentVersion: "0.2.0",
+        version: "0.3.0",
+        date: new Date(Date.now() - 86_400_000).toISOString(),
+        notes: "AccountsVU 0.3.0 — sample release notes from the browser preview.",
+        canInstall: true,
+      };
+    case "open_releases_page":
+      return null;
     case "cancel_restore":
       restoreChosen = false;
       restoreChecked = false;
@@ -1791,7 +1801,7 @@ export async function previewBackend(command: string, args: Record<string, any> 
   if (hosted !== undefined) return hosted;
   switch (command) {
     case "app_health":
-      return { appVersion: "0.1.0", schemaVersion: 8, database: "(browser preview — in memory)", organisationConfigured: !!org };
+      return { appVersion: "0.2.0", schemaVersion: 8, database: "(browser preview — in memory)", organisationConfigured: !!org };
     case "dashboard_summary":
       return {
         salesThisMonth: "0", purchasesThisMonth: "0",
@@ -1898,4 +1908,19 @@ export async function previewBackend(command: string, args: Record<string, any> 
       throw { code: "not_found", message: `Unknown command ${command}`, fields: [] } satisfies Fail;
     }
   }
+}
+
+/** Simulated download for the browser preview; it can't install or restart. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export async function previewInstallUpdate(onProgress: (p: any) => void): Promise<void> {
+  const total = 12_400_000;
+  onProgress({ event: "started", contentLength: total });
+  for (let got = 0; got < total; ) {
+    await new Promise((r) => setTimeout(r, 90));
+    got = Math.min(total, got + 620_000);
+    onProgress({ event: "progress", downloaded: got });
+  }
+  onProgress({ event: "finished" });
+  await new Promise((r) => setTimeout(r, 400));
+  throw { code: "invalid_input", message: "The browser preview can't install updates. Updates install in the desktop app.", fields: [] };
 }
