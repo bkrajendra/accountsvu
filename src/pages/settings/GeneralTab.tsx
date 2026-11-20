@@ -10,6 +10,7 @@ import { SettingsSection as Section } from "./SettingsSection";
 
 export function GeneralTab() {
   const { data: health } = useQuery({ queryKey: keys.health, queryFn: api.health });
+  const { data: rules } = useQuery({ queryKey: ["rulePackInfo"], queryFn: api.rulePackInfo, staleTime: Infinity });
 
   return (
     <>
@@ -22,6 +23,10 @@ export function GeneralTab() {
           <dl className="divide-y divide-line text-[13.5px]">
             <Row label="Installed version" value={health?.appVersion ?? "—"} />
             <UpdateRow />
+            <Row
+              label="GST rules"
+              value={rules ? <span title={rules.sources.map((x) => x.title).join(" · ")}>{`${rules.version} · ${rules.hsnEntries} HSN/SAC entries`}</span> : "—"}
+            />
             <Row label="Database schema" value={health ? `v${health.schemaVersion}` : "—"} />
             <Row label="Data file" value={<span className="selectable break-all">{health?.database ?? "—"}</span>} />
             <Row

@@ -29,6 +29,8 @@ pub fn run() {
         commands::create_party,
         commands::update_party,
         commands::item_options,
+        commands::hsn_lookup,
+        commands::rule_pack_info,
         commands::list_items,
         commands::create_item,
         commands::update_item,

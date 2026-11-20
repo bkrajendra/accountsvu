@@ -5,6 +5,9 @@
  * live in crates/application and are the only ones that matter.
  */
 import type {
+  Gstr1Info,
+  Gstr1Section,
+  TaxWarning,
   Account,
   BackupLog,
   LockStatus,
@@ -403,7 +406,36 @@ function masters(command: string, args: Record<string, any>): unknown {
         gstRates: [0, 10, 25, 100, 150, 300, 500, 600, 750, 1200, 1800, 2800, 4000].map((basisPoints) => ({
           basisPoints,
           legacy: [600, 1200, 2800].includes(basisPoints),
+          label: pct(basisPoints),
+          from: RATE_DATES[basisPoints]?.from ?? null,
+          to: RATE_DATES[basisPoints]?.to ?? null,
+          note: basisPoints === 1200 || basisPoints === 2800 ? "Withdrawn from 22 Sep 2025" : null,
         })),
+      };
+    case "hsn_lookup": {
+      const q = String(args.query ?? "").trim().toLowerCase();
+      if (!q) return [];
+      const date = args.date ?? new Date().toISOString().slice(0, 10);
+      const words = q.split(/\s+/).filter((w) => w.length >= 3);
+      const hit = (h: PreviewHsn) =>
+        /^\d+$/.test(q)
+          ? h.code.startsWith(q) || q.startsWith(h.code)
+          : words.some((w) => h.description.toLowerCase().split(/[^a-z0-9]+/).some((s) => s.startsWith(w)));
+      return PREVIEW_HSN.filter(hit)
+        .map((h) => {
+          const r = hsnRateOn(h, date);
+          return r && { code: h.code, kind: h.kind, description: h.description, conditional: false, taxCategory: "taxable", rateBp: r.bp, since: r.from ?? null, source: r.from ? "Notification 9/2025-Central Tax (Rate)" : "Notification 1/2017-Central Tax (Rate)" };
+        })
+        .filter(Boolean);
+    }
+    case "rule_pack_info":
+      return {
+        version: PREVIEW_PACK, published: "2026-11-20", hsnEntries: 46,
+        note: "Starter pack for small businesses (browser preview shows a sample).",
+        sources: [
+          { id: "G2017", title: "Notification 1/2017-Central Tax (Rate) and amendments", detail: "Goods rate schedules from 1 Jul 2017" },
+          { id: "R2025", title: "Notification 9/2025-Central Tax (Rate)", detail: "Rate rationalisation from 22 Sep 2025" },
+        ],
       };
     case "list_items":
       return items;
@@ -508,6 +540,75 @@ function calcLine(l: SalesLineInput, kind: SupplyKind, taxFree: boolean, inclusi
   return c;
 }
 
+// Rule pack sample for the preview (the real pack lives in crates/gst-engine/rules).
+const PREVIEW_PACK = "2026.11.1";
+const RATE_DATES: Record<number, { from?: string; to?: string }> = {
+  600: { to: "2025-09-21" }, 1200: { to: "2025-09-21" }, 2800: { to: "2025-09-21" }, 4000: { from: "2025-09-22" },
+};
+type PreviewHsn = { code: string; kind: "goods" | "service"; description: string; rates: { bp: number; from?: string; to?: string }[] };
+const CHANGE = [{ to: "2025-09-21" }, { from: "2025-09-22" }];
+const PREVIEW_HSN: PreviewHsn[] = [
+  { code: "0405", kind: "goods", description: "Butter, ghee and other milk fats", rates: [{ bp: 1200, ...CHANGE[0] }, { bp: 500, ...CHANGE[1] }] },
+  { code: "3401", kind: "goods", description: "Soap", rates: [{ bp: 1800, ...CHANGE[0] }, { bp: 500, ...CHANGE[1] }] },
+  { code: "8415", kind: "goods", description: "Air conditioners", rates: [{ bp: 2800, ...CHANGE[0] }, { bp: 1800, ...CHANGE[1] }] },
+  { code: "8418", kind: "goods", description: "Refrigerators and freezers", rates: [{ bp: 1800 }] },
+  { code: "8471", kind: "goods", description: "Computers and peripherals", rates: [{ bp: 1800 }] },
+  { code: "8517", kind: "goods", description: "Mobile phones and network equipment", rates: [{ bp: 1800 }] },
+  { code: "9983", kind: "service", description: "Professional, technical and business services (incl. IT)", rates: [{ bp: 1800 }] },
+  { code: "9987", kind: "service", description: "Maintenance, repair and installation", rates: [{ bp: 1800 }] },
+];
+const pct = (bp: number) => `${bp / 100}%`;
+const fmtDate = (d: string) => new Date(d + "T00:00:00").toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
+const hsnRateOn = (h: PreviewHsn, date: string) => h.rates.find((r) => (!r.from || date >= r.from) && (!r.to || date <= r.to));
+const hsnRule = (code?: string | null) =>
+  code ? PREVIEW_HSN.filter((h) => code.startsWith(h.code)).sort((a, b) => b.code.length - a.code.length)[0] : undefined;
+
+function previewWarnings(input: SalesDocumentInput, s: ReturnType<typeof supplyFor>): TaxWarning[] {
+  const out: TaxWarning[] = [];
+  const date = s.original?.docDate ?? input.docDate;
+  if (!date) return out;
+  const home = s.party?.gstin ? Number(s.party.gstin.slice(0, 2)) : null;
+  if (home && s.pos && s.pos !== 96 && home !== s.pos)
+    out.push({ code: "place_of_supply", field: "placeOfSupply", message: `Place of supply is state ${s.pos}, but the customer's GSTIN is registered in state ${home}. Check that this is right.` });
+  input.lines.forEach((l, i) => {
+    if (l.taxCategory !== "taxable") return;
+    const bp = toBp(l.gstRate);
+    const hsn = hsnRule(l.hsnSac ?? items.find((it) => it.id === l.itemId)?.hsnSac);
+    const want = hsn && hsnRateOn(hsn, date);
+    const d = RATE_DATES[bp];
+    if (d && ((d.to && date > d.to) || (d.from && date < d.from))) {
+      let message = `${pct(bp)} GST applies ${d.to ? `only up to ${fmtDate(d.to)}` : `only from ${fmtDate(d.from!)}`}.`;
+      if (hsn && want) message += ` The rule pack has ${pct(want.bp)} for HSN/SAC ${hsn.code} (${hsn.description}).`;
+      out.push({ code: "rate_not_in_force", field: `lines.${i}.gstRate`, message });
+    } else if (hsn && want && want.bp !== bp) {
+      out.push({ code: "rate_differs", field: `lines.${i}.gstRate`, message: `HSN/SAC ${hsn.code} (${hsn.description}) is ${pct(want.bp)}${want.from ? ` from ${fmtDate(want.from)}` : ""} in the rule pack; this line uses ${pct(bp)}. Check the rate.` });
+    }
+  });
+  return out;
+}
+
+const GSTR1_LABELS: Record<Gstr1Section, string> = {
+  b2b: "B2B (table 4A)", b2cl: "B2C large (table 5)", b2cs: "B2C small (table 7)",
+  expWpay: "Export with payment of tax (table 6A)", expWopay: "Export without payment of tax (table 6A)",
+  sezWpay: "SEZ with payment of tax (table 6B)", sezWopay: "SEZ without payment of tax (table 6B)",
+  cdnr: "Credit/debit notes, registered (table 9B)", cdnur: "Credit/debit notes, unregistered (table 9B)",
+};
+
+function previewGstr1(d: { docType: string; partyGstType: string; placeOfSupply: number; supplyKind: string; zeroRated: boolean; totalPaise: number }, taxable: boolean, other: boolean): Gstr1Info {
+  const overseas = d.partyGstType === "overseas" || d.placeOfSupply === 96;
+  const registered = d.partyGstType === "regular" || d.partyGstType === "composition";
+  const sez = d.partyGstType === "sez";
+  let section: Gstr1Section | null = null;
+  if (d.docType === "credit_note") section = registered || sez ? "cdnr" : "cdnur";
+  else if (d.docType !== "bill_of_supply" && (taxable || overseas)) {
+    if (overseas) section = d.zeroRated ? "expWopay" : "expWpay";
+    else if (sez) section = d.zeroRated ? "sezWopay" : "sezWpay";
+    else if (registered) section = "b2b";
+    else section = d.supplyKind === "inter_state" && d.totalPaise > 10_000_000 ? "b2cl" : "b2cs";
+  }
+  return { section, label: section ? GSTR1_LABELS[section] : null, nilTable: !overseas && (other || (d.docType === "bill_of_supply" && taxable)) };
+}
+
 function calculate(input: SalesDocumentInput): SalesCalculation {
   const s = supplyFor(input);
   const taxFree = input.docType === "bill_of_supply" || input.zeroRated;
@@ -525,7 +626,18 @@ function calculate(input: SalesDocumentInput): SalesCalculation {
   t.totalPaise = org?.roundToRupee ? Math.round(exact / 100) * 100 : exact;
   t.roundOffPaise = t.totalPaise - exact;
   const sr = series.find((x) => x.isDefault && x.documentType === input.docType && x.gstRegistrationId === (s.reg?.id ?? null));
-  return { supplyKind: s.kind, placeOfSupply: s.pos, supplierState: s.supplier, lines, totals: t, numberPreview: s.party && sr ? sr.nextPreview : null };
+  const gstr1 =
+    s.party && s.pos != null
+      ? previewGstr1(
+          { docType: input.docType, partyGstType: s.party.gstType, placeOfSupply: s.pos, supplyKind: s.kind ?? "intra_state", zeroRated: input.zeroRated, totalPaise: t.totalPaise },
+          input.lines.some((l) => l.taxCategory === "taxable"),
+          input.lines.some((l) => l.taxCategory !== "taxable"),
+        )
+      : null;
+  return {
+    supplyKind: s.kind, placeOfSupply: s.pos, supplierState: s.supplier, lines, totals: t, numberPreview: s.party && sr ? sr.nextPreview : null,
+    warnings: s.party ? previewWarnings(input, s) : [], gstr1, rulePackVersion: PREVIEW_PACK,
+  };
 }
 
 function checkSales(input: SalesDocumentInput): [string, string][] {
@@ -565,6 +677,7 @@ function salesView(id: string): SalesDocumentView {
     original: o ? ref(o) : null,
     creditNotes: notes.map(ref),
     creditedPaise: notes.filter((x) => x.status === "issued").reduce((a, x) => a + x.totalPaise, 0),
+    gstr1: previewGstr1(d, d.lines.some((l) => l.taxCategory === "taxable"), d.lines.some((l) => l.taxCategory !== "taxable")),
   };
 }
 
@@ -585,6 +698,7 @@ function writeSales(id: string | null, input: SalesDocumentInput): SalesDocument
     pricesIncludeTax: input.pricesIncludeTax, originalDocumentId: input.originalDocumentId ?? null, reason: input.reason ?? null,
     notes: input.notes ?? null, ...c.totals, paidPaise: 0, journalEntryId: null, cancelEntryId: null, cancelReason: null,
     rowVersion: (existing?.rowVersion ?? 0) + 1, createdAt: existing?.createdAt ?? now(), updatedAt: now(), issuedAt: null, cancelledAt: null,
+    rulePackVersion: PREVIEW_PACK,
     lines: input.lines.map((l, i) => ({
       id: crypto.randomUUID(), documentId: docId, lineNo: i + 1, itemId: l.itemId ?? null,
       description: l.description || item(l.itemId)?.name || "", hsnSac: l.hsnSac ?? item(l.itemId)?.hsnSac ?? null, unit: l.unit ?? null,
@@ -677,7 +791,7 @@ function calculatePurchase(input: PurchaseDocumentInput): PurchaseCalculation {
   t.totalPaise = org?.roundToRupee ? Math.round(base / 100) * 100 : base;
   t.roundOffPaise = t.totalPaise - base;
   const sr = series.find((x) => x.isDefault && x.documentType === "debit_note");
-  return { supplyKind: s.kind, lines, totals: t, reverseChargeTaxPaise: input.reverseCharge ? tax : 0, numberPreview: input.docType === "debit_note" ? (sr?.nextPreview ?? null) : null };
+  return { supplyKind: s.kind, lines, totals: t, reverseChargeTaxPaise: input.reverseCharge ? tax : 0, numberPreview: input.docType === "debit_note" ? (sr?.nextPreview ?? null) : null, warnings: [], rulePackVersion: PREVIEW_PACK };
 }
 
 function checkPurchase(input: PurchaseDocumentInput): [string, string][] {
@@ -753,7 +867,7 @@ function writePurchase(id: string | null, input: PurchaseDocumentInput) {
     placeOfSupply: s.ours, supplierState: s.theirs, supplyKind: s.kind, reverseCharge: input.reverseCharge, pricesIncludeTax: input.pricesIncludeTax,
     paymentMode: mode as PaymentMode, originalDocumentId: input.originalDocumentId ?? null, reason: input.reason ?? null, notes: input.notes ?? null,
     ...c.totals, paidPaise: 0, journalEntryId: null, cancelEntryId: null, cancelReason: null, rowVersion: (existing?.rowVersion ?? 0) + 1,
-    createdAt: existing?.createdAt ?? now(), updatedAt: now(), recordedAt: null, cancelledAt: null,
+    createdAt: existing?.createdAt ?? now(), updatedAt: now(), recordedAt: null, cancelledAt: null, rulePackVersion: PREVIEW_PACK,
     lines: input.lines.map((l, i) => {
       const lc = c.lines[i]!;
       const tax = lc.cgstPaise + lc.sgstPaise + lc.utgstPaise + lc.igstPaise;
@@ -1777,7 +1891,7 @@ function hostCommand(command: string, args: Record<string, any>): unknown {
       throw { code: "invalid_input", message: "The browser preview can't restart. Restoring runs in the desktop app.", fields: [] } satisfies Fail;
     case "check_update":
       return {
-        currentVersion: "0.2.0",
+        currentVersion: "0.2.1",
         version: "0.3.0",
         date: new Date(Date.now() - 86_400_000).toISOString(),
         notes: "AccountsVU 0.3.0 — sample release notes from the browser preview.",
@@ -1801,7 +1915,7 @@ export async function previewBackend(command: string, args: Record<string, any> 
   if (hosted !== undefined) return hosted;
   switch (command) {
     case "app_health":
-      return { appVersion: "0.2.0", schemaVersion: 8, database: "(browser preview — in memory)", organisationConfigured: !!org };
+      return { appVersion: "0.2.1", schemaVersion: 9, database: "(browser preview — in memory)", organisationConfigured: !!org };
     case "dashboard_summary":
       return {
         salesThisMonth: "0", purchasesThisMonth: "0",

@@ -11,11 +11,15 @@ use std::str::FromStr;
 
 use av_domain::masters::validate_hsn_sac;
 use av_domain::{
-    DocumentType, FinancialYear, ItemKind, Money, PartyGstType, PartyKind, SeriesFormat, StateCode,
-    TaxCategory, new_id,
+    DocumentType, FinancialYear, Gstin, ItemKind, Money, PartyGstType, PartyKind, SeriesFormat,
+    StateCode, TaxCategory, new_id,
+};
+use av_gst_engine::checks::{
+    Gstr1Placement, Gstr1Section, LineFacts, OutwardDoc, OutwardFacts, Recipient, TaxWarning,
+    gstr1_placement, line_warnings, place_of_supply_warning,
 };
 use av_gst_engine::invoice::{LineInput, Supply, compute_document, line_amount};
-use av_gst_engine::{SupplyKind, TaxRate};
+use av_gst_engine::{RulePack, SupplyKind, TaxRate};
 use av_persistence::records::{
     OrganisationRecord, PartyRecord, RegistrationRecord, SalesDocumentRecord, SalesLineRecord,
 };
@@ -141,6 +145,28 @@ pub struct SalesDocumentView {
     pub credit_notes: Vec<DocumentRef>,
     /// Issued credit notes total, paise.
     pub credited_paise: i64,
+    /// Where the document is reported in GSTR-1.
+    pub gstr1: Gstr1Info,
+}
+
+/// GSTR-1 placement with its label, for display.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Gstr1Info {
+    pub section: Option<Gstr1Section>,
+    pub label: Option<&'static str>,
+    /// Exempt, nil-rated or non-GST lines reported in table 8.
+    pub nil_table: bool,
+}
+
+impl From<Gstr1Placement> for Gstr1Info {
+    fn from(p: Gstr1Placement) -> Self {
+        Gstr1Info {
+            section: p.section,
+            label: p.section.map(Gstr1Section::label),
+            nil_table: p.nil_table,
+        }
+    }
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -180,6 +206,10 @@ pub struct SalesCalculation {
     pub totals: TotalsCalc,
     /// The number the document would get if issued now.
     pub number_preview: Option<String>,
+    /// Points to review before issuing; never blocking.
+    pub warnings: Vec<TaxWarning>,
+    pub gstr1: Option<Gstr1Info>,
+    pub rule_pack_version: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -189,6 +219,8 @@ pub struct SalesCalculation {
 struct Prepared {
     doc: SalesDocumentRecord,
     lines: Vec<SalesLineRecord>,
+    warnings: Vec<TaxWarning>,
+    gstr1: Gstr1Info,
 }
 
 pub(crate) fn to_paise(m: Money) -> i64 {
@@ -220,6 +252,71 @@ fn kind_of(rec: &SalesDocumentRecord) -> SupplyKind {
         "intra_union_territory" => SupplyKind::IntraUnionTerritory,
         _ => SupplyKind::InterState,
     }
+}
+
+fn recipient_of(d: &SalesDocumentRecord) -> Recipient {
+    if d.place_of_supply == OTHER_COUNTRY {
+        return Recipient::Overseas;
+    }
+    match PartyGstType::parse(&d.party_gst_type) {
+        Some(PartyGstType::Overseas) => Recipient::Overseas,
+        Some(PartyGstType::Sez) => Recipient::Sez,
+        Some(PartyGstType::Regular | PartyGstType::Composition) => Recipient::Registered,
+        _ => Recipient::Unregistered,
+    }
+}
+
+fn ymd(s: &str) -> NaiveDate {
+    NaiveDate::parse_from_str(s, "%Y-%m-%d").unwrap_or_default()
+}
+
+/// GSTR-1 placement of a sales document. Without lines (an original
+/// invoice looked up for a credit note) the document is treated as taxable.
+pub(crate) fn gstr1_of(
+    d: &SalesDocumentRecord,
+    lines: &[SalesLineRecord],
+    original: Option<&SalesDocumentRecord>,
+) -> Gstr1Info {
+    let doc = match d.doc_type.as_str() {
+        "credit_note" => OutwardDoc::CreditNote,
+        "bill_of_supply" => OutwardDoc::BillOfSupply,
+        _ => OutwardDoc::Invoice,
+    };
+    let (has_taxable, has_other) = if lines.is_empty() {
+        (d.doc_type != "bill_of_supply", false)
+    } else {
+        (
+            lines.iter().any(|l| l.tax_category == "taxable"),
+            lines.iter().any(|l| l.tax_category != "taxable"),
+        )
+    };
+    let pack = RulePack::bundled();
+    let original_section = original.and_then(|o| {
+        let f = OutwardFacts {
+            doc: OutwardDoc::Invoice,
+            date: ymd(&o.doc_date),
+            recipient: recipient_of(o),
+            kind: kind_of(o),
+            zero_rated: o.zero_rated,
+            total_paise: o.total_paise,
+            has_taxable_lines: o.doc_type != "bill_of_supply",
+            has_other_lines: false,
+            original_section: None,
+        };
+        gstr1_placement(pack, &f).section
+    });
+    let facts = OutwardFacts {
+        doc,
+        date: ymd(&d.doc_date),
+        recipient: recipient_of(d),
+        kind: kind_of(d),
+        zero_rated: d.zero_rated,
+        total_paise: d.total_paise,
+        has_taxable_lines: has_taxable,
+        has_other_lines: has_other,
+        original_section,
+    };
+    gstr1_placement(pack, &facts).into()
 }
 
 pub(crate) fn kind_str(k: SupplyKind) -> &'static str {
@@ -489,6 +586,7 @@ impl<S: Store> AppCore<S> {
                     .is_some_and(|o| o.doc_type == "bill_of_supply"));
         let mut engine_lines = Vec::new();
         let mut line_records = Vec::new();
+        let mut line_facts: Vec<(usize, Option<String>, TaxCategory, u32)> = Vec::new();
         for (i, l) in input.lines.iter().enumerate() {
             let f = |name: &str| format!("lines.{i}.{name}");
             let mut le = Errors::new("");
@@ -561,6 +659,9 @@ impl<S: Store> AppCore<S> {
                     le.add(&f("hsnSac"), "Enter the HSN/SAC code.");
                 }
                 _ => {}
+            }
+            if let Some(c) = category {
+                line_facts.push((i, hsn.clone(), c, rate));
             }
             let quantity = parse_quantity(&mut le, &f("quantity"), &l.quantity);
             let price = parse_amount(&mut le, &f("unitPrice"), &Some(l.unit_price.clone()), false);
@@ -717,13 +818,18 @@ impl<S: Store> AppCore<S> {
             updated_at: now,
             issued_at: None,
             cancelled_at: None,
+            rule_pack_version: Some(RulePack::bundled().version.clone()),
         };
+        let warnings = review(&doc, p, original.as_ref(), &line_facts);
+        let gstr1 = gstr1_of(&doc, &line_records, original.as_ref());
         let ok = e.is_empty();
         Ok((
             e,
             ok.then_some(Prepared {
                 doc,
                 lines: line_records,
+                warnings,
+                gstr1,
             }),
         ))
     }
@@ -772,6 +878,9 @@ impl<S: Store> AppCore<S> {
                     total_paise: d.total_paise,
                 },
                 number_preview,
+                warnings: p.warnings.clone(),
+                gstr1: Some(p.gstr1.clone()),
+                rule_pack_version: RulePack::bundled().version.clone(),
             });
         }
         // Incomplete document: work out what we can, line by line.
@@ -861,6 +970,9 @@ impl<S: Store> AppCore<S> {
             lines,
             totals,
             number_preview: None,
+            warnings: Vec::new(),
+            gstr1: None,
+            rule_pack_version: RulePack::bundled().version.clone(),
         })
     }
 
@@ -898,6 +1010,7 @@ impl<S: Store> AppCore<S> {
         lines: Vec<SalesLineRecord>,
         related: Related,
     ) -> SalesDocumentView {
+        let gstr1 = gstr1_of(&d, &lines, related.original_record.as_ref());
         let credited_paise = related
             .credit_notes
             .iter()
@@ -911,6 +1024,7 @@ impl<S: Store> AppCore<S> {
             original: related.original,
             credit_notes: related.credit_notes,
             credited_paise,
+            gstr1,
         }
     }
 
@@ -925,10 +1039,11 @@ impl<S: Store> AppCore<S> {
             .await?
             .ok_or(AppError::NotFound("Document"))?;
         let lines = uow.sales_lines(&d.id).await?;
-        let original = match &d.original_document_id {
-            Some(oid) => uow.get_sales(org_id, oid).await?.map(|o| doc_ref(&o)),
+        let original_record = match &d.original_document_id {
+            Some(oid) => uow.get_sales(org_id, oid).await?,
             None => None,
         };
+        let original = original_record.as_ref().map(doc_ref);
         let credit_notes = uow
             .credit_notes_for(org_id, &d.id)
             .await?
@@ -940,6 +1055,7 @@ impl<S: Store> AppCore<S> {
             lines,
             Related {
                 original,
+                original_record,
                 credit_notes,
             },
         ))
@@ -1320,7 +1436,47 @@ impl<S: Store> AppCore<S> {
 
 struct Related {
     original: Option<DocumentRef>,
+    original_record: Option<SalesDocumentRecord>,
     credit_notes: Vec<DocumentRef>,
+}
+
+/// Rule-pack review of a prepared document (warnings only). A credit note's
+/// rates are checked on its invoice's date, since it adjusts that supply.
+fn review(
+    doc: &SalesDocumentRecord,
+    party: &PartyRecord,
+    original: Option<&SalesDocumentRecord>,
+    lines: &[(usize, Option<String>, TaxCategory, u32)],
+) -> Vec<TaxWarning> {
+    let pack = RulePack::bundled();
+    let rate_date = ymd(original.map_or(doc.doc_date.as_str(), |o| o.doc_date.as_str()));
+    let mut out = Vec::new();
+    if recipient_of(doc) != Recipient::Overseas {
+        let pos = u8::try_from(doc.place_of_supply)
+            .ok()
+            .and_then(|c| StateCode::new(c).ok());
+        let home = party
+            .gstin
+            .as_deref()
+            .and_then(|g| Gstin::parse(g).ok())
+            .map(|g| g.state());
+        if let Some(w) = pos.and_then(|pos| place_of_supply_warning(pos, home)) {
+            out.push(w);
+        }
+    }
+    for (i, hsn, category, rate) in lines {
+        out.extend(line_warnings(
+            pack,
+            rate_date,
+            *i,
+            LineFacts {
+                hsn: hsn.as_deref(),
+                category: *category,
+                rate_bp: *rate,
+            },
+        ));
+    }
+    out
 }
 
 fn doc_ref(d: &SalesDocumentRecord) -> DocumentRef {

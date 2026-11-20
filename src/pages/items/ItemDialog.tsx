@@ -7,6 +7,9 @@ import { useSave } from "../../lib/mutations";
 import { Button } from "../../components/ui";
 import { Dialog } from "../../components/Dialog";
 import { ChoiceCards, Field, FormGrid, Select, TextInput, Toggle } from "../../components/form";
+import { rateLabel } from "../../components/TaxWarnings";
+import { todayIso } from "../../lib/sales";
+import { HsnHint } from "./HsnHint";
 
 export const TAX_CATEGORIES: { value: TaxCategory; label: string }[] = [
   { value: "taxable", label: "Taxable" },
@@ -106,6 +109,20 @@ export function ItemDialog({ item, onClose }: { item?: Item; onClose: () => void
               <TextInput id={p.id} invalid={p.invalid} className="num" inputMode="numeric" maxLength={8} value={d.hsnSac} onChange={(e) => set("hsnSac", e.target.value.replace(/\D/g, ""))} />
             )}
           </Field>
+          <HsnHint
+            code={d.hsnSac}
+            name={d.name}
+            taxCategory={d.taxCategory}
+            rateBp={Math.round(Number(d.gstRate) * 100)}
+            onUse={(s, withCode) => {
+              if (withCode) {
+                set("hsnSac", s.code);
+                set("kind", s.kind);
+              }
+              set("taxCategory", s.taxCategory);
+              if (s.taxCategory === "taxable") set("gstRate", bpToPercent(s.rateBp));
+            }}
+          />
           <Field label="Description" optional error={err.description} className="col-span-2">
             {(p) => <TextInput id={p.id} invalid={p.invalid} value={d.description} onChange={(e) => set("description", e.target.value)} />}
           </Field>
@@ -131,8 +148,7 @@ export function ItemDialog({ item, onClose }: { item?: Item; onClose: () => void
                   .filter((r) => r.basisPoints > 0)
                   .map((r) => (
                     <option key={r.basisPoints} value={bpToPercent(r.basisPoints)}>
-                      {formatRate(r.basisPoints)}
-                      {r.legacy ? " (before Sep 2025)" : ""}
+                      {rateLabel(r, todayIso())}
                     </option>
                   ))}
               </Select>

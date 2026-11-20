@@ -198,6 +198,18 @@ export function SalesDocument() {
               )}
             </Card>
           )}
+          {doc.status !== "cancelled" && (doc.gstr1.label || doc.gstr1.nilTable) && (
+            <Card className="p-4 text-[13px]">
+              <div className="mb-2 text-[12px] font-semibold uppercase tracking-[0.04em] text-muted">GST return</div>
+              <div className="text-muted">Reported in GSTR-1</div>
+              <div className="mt-0.5 font-medium">
+                {[doc.gstr1.label, doc.gstr1.nilTable ? "Nil/exempt/non-GST (table 8)" : null].filter(Boolean).join(" · ")}
+              </div>
+              <p className="mt-2 text-[12px] text-subtle">
+                {doc.rulePackVersion ? `Tax worked out with GST rules ${doc.rulePackVersion}.` : "Tax worked out before versioned GST rules."}
+              </p>
+            </Card>
+          )}
         </div>
       </div>
 

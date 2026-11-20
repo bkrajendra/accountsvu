@@ -222,6 +222,21 @@ pub fn item_options(core: State<'_, AppCore>) -> ItemOptions {
 }
 
 #[tauri::command]
+pub fn hsn_lookup(
+    core: State<'_, AppCore>,
+    query: String,
+    date: Option<String>,
+) -> Vec<av_application::masters::HsnSuggestion> {
+    let date = date.and_then(|d| chrono::NaiveDate::parse_from_str(&d, "%Y-%m-%d").ok());
+    core.hsn_lookup(&query, date)
+}
+
+#[tauri::command]
+pub fn rule_pack_info(core: State<'_, AppCore>) -> av_application::masters::RulePackInfo {
+    core.rule_pack_info()
+}
+
+#[tauri::command]
 pub async fn list_items(core: State<'_, AppCore>) -> CmdResult<Vec<ItemRecord>> {
     Ok(core.list_items(&ctx()).await?)
 }

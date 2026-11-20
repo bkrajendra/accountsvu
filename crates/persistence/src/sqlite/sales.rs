@@ -9,7 +9,7 @@ const DOC_COLS: &str = "id, organisation_id, doc_type, status, gst_registration_
     supplier_state, supply_kind, zero_rated, reverse_charge, prices_include_tax, original_document_id, reason, notes, \
     taxable_paise, cgst_paise, sgst_paise, utgst_paise, igst_paise, cess_paise, round_off_paise, total_paise, \
     paid_paise, journal_entry_id, cancel_entry_id, cancel_reason, row_version, created_at, updated_at, issued_at, \
-    cancelled_at";
+    cancelled_at, rule_pack_version";
 
 const LINE_COLS: &str = "id, document_id, line_no, item_id, description, hsn_sac, unit, quantity, unit_price_paise, \
     discount_paise, tax_category, gst_rate_bp, cess_rate_bp, amount_paise, taxable_paise, cgst_paise, sgst_paise, \
@@ -53,9 +53,11 @@ impl SalesRepo for SqliteUow {
                 party_address, place_of_supply, supplier_state, supply_kind, zero_rated, reverse_charge,
                 prices_include_tax, original_document_id, reason, notes, taxable_paise, cgst_paise, sgst_paise,
                 utgst_paise, igst_paise, cess_paise, round_off_paise, total_paise, paid_paise, journal_entry_id,
-                cancel_entry_id, cancel_reason, row_version, created_at, updated_at, issued_at, cancelled_at)
+                cancel_entry_id, cancel_reason, row_version, created_at, updated_at, issued_at, cancelled_at,
+                rule_pack_version)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20,
-                ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41)",
+                ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41,
+                ?42)",
         )
         .bind(&d.id)
         .bind(&d.organisation_id)
@@ -98,6 +100,7 @@ impl SalesRepo for SqliteUow {
         .bind(&d.updated_at)
         .bind(&d.issued_at)
         .bind(&d.cancelled_at)
+        .bind(&d.rule_pack_version)
         .execute(self.c())
         .await?;
         Ok(())
@@ -117,8 +120,8 @@ impl SalesRepo for SqliteUow {
                 cgst_paise = ?26, sgst_paise = ?27, utgst_paise = ?28, igst_paise = ?29, cess_paise = ?30,
                 round_off_paise = ?31, total_paise = ?32, paid_paise = ?33, journal_entry_id = ?34,
                 cancel_entry_id = ?35, cancel_reason = ?36, updated_at = ?37, issued_at = ?38, cancelled_at = ?39,
-                row_version = row_version + 1
-             WHERE id = ?1 AND organisation_id = ?2 AND row_version = ?40",
+                rule_pack_version = ?40, row_version = row_version + 1
+             WHERE id = ?1 AND organisation_id = ?2 AND row_version = ?41",
         )
         .bind(&d.id)
         .bind(&d.organisation_id)
@@ -159,6 +162,7 @@ impl SalesRepo for SqliteUow {
         .bind(&d.updated_at)
         .bind(&d.issued_at)
         .bind(&d.cancelled_at)
+        .bind(&d.rule_pack_version)
         .bind(expected_version)
         .execute(self.c())
         .await?;

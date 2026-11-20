@@ -24,6 +24,7 @@ import { Badge, Button, Card, Segmented } from "../../components/ui";
 import { Field, Select, TextInput, Toggle } from "../../components/form";
 import { Combobox } from "../../components/Combobox";
 import { Dialog } from "../../components/Dialog";
+import { WarningList, rateLabel, warningsFor } from "../../components/TaxWarnings";
 import { CellInput, useDebounced } from "../../components/editor";
 import { AttachmentsPanel } from "../../components/Attachments";
 
@@ -289,7 +290,7 @@ function Editor({
     .map((p) => ({ id: p.id, label: p.name, detail: p.gstin ?? stateName(p.stateCode) }));
   const itemOptions = items.filter((i) => i.isActive).map((i) => ({ id: i.id, label: i.name, detail: [i.code, i.hsnSac].filter(Boolean).join(" · ") }));
   const taxOptions = [
-    ...(options?.gstRates.filter((r) => r.basisPoints > 0).map((r) => ({ value: `taxable:${percent(r.basisPoints)}`, label: `${formatRate(r.basisPoints)}${r.legacy ? " (old)" : ""}` })) ?? []),
+    ...(options?.gstRates.filter((r) => r.basisPoints > 0).map((r) => ({ value: `taxable:${percent(r.basisPoints)}`, label: rateLabel(r, d.supplierInvoiceDate || d.docDate) })) ?? []),
     { value: "exempt", label: "Exempt" },
     { value: "nil_rated", label: "Nil-rated" },
     { value: "non_gst", label: "Non-GST" },
@@ -417,6 +418,7 @@ function Editor({
                   const has = (f: string) => !!err[`lines.${i}.${f}`];
                   const taxed = l.tax.startsWith("taxable");
                   const errs = lineErrors(i);
+                  const warns = keptIdx.includes(i) ? warningsFor(calc?.warnings, keptIdx.indexOf(i)) : [];
                   return [
                     <tr key={l.key} data-line={l.key} className="align-top">
                       <td className="num py-2 pl-4 pt-4 text-subtle">{i + 1}</td>
@@ -488,15 +490,16 @@ function Editor({
                         </td>
                       </tr>
                     ),
-                    errs.length > 0 && (
+                    (errs.length > 0 || warns.length > 0) && (
                       <tr key={`${l.key}-err`}>
                         <td />
-                        <td colSpan={9} className="px-2 pb-2">
+                        <td colSpan={9} className="space-y-0.5 px-2 pb-2">
                           {errs.map((m) => (
                             <p key={m} className="flex items-center gap-1.5 text-[12px] text-danger" role="alert">
                               <AlertCircle size={12} /> {m}
                             </p>
                           ))}
+                          <WarningList warnings={warns} className="space-y-0.5" />
                         </td>
                       </tr>
                     ),
@@ -606,8 +609,13 @@ function Summary({ calc, reverseCharge }: { calc?: PurchaseCalculation; reverseC
           You pay {formatPaise(calc.reverseChargeTaxPaise)} GST yourself under reverse charge.
         </p>
       )}
+      {!!calc?.warnings.length && (
+        <p className="mt-3 text-[11.5px] text-subtle">
+          {calc.warnings.length === 1 ? "1 rate" : `${calc.warnings.length} rates`} to check against the supplier's bill. They don't stop you recording it.
+        </p>
+      )}
       <div className="mt-4">
-        <Badge>Calculated by the GST engine</Badge>
+        <Badge>{calc ? `GST engine · rules ${calc.rulePackVersion}` : "Calculated by the GST engine"}</Badge>
       </div>
     </Card>
   );

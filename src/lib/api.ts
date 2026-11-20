@@ -288,9 +288,65 @@ export interface ItemInput {
   isActive: boolean;
 }
 
+export interface RateOption {
+  basisPoints: number;
+  /** Not chargeable today (e.g. 12% and 28% after 21 Sep 2025). */
+  legacy: boolean;
+  label: string;
+  /** Dates the slab applies, inclusive (YYYY-MM-DD). */
+  from: string | null;
+  to: string | null;
+  note: string | null;
+}
+
 export interface ItemOptions {
   units: { code: string; label: string }[];
-  gstRates: { basisPoints: number; legacy: boolean }[];
+  gstRates: RateOption[];
+}
+
+/** Whether a rate slab can be charged on a date (YYYY-MM-DD). */
+export function rateInForce(r: RateOption, date: string | null | undefined): boolean {
+  if (!date) return !r.legacy;
+  return (!r.from || date >= r.from) && (!r.to || date <= r.to);
+}
+
+// ---------------------------------------------------------------------------
+// Phase 2.1: rule pack, tax warnings, GSTR-1 placement
+// ---------------------------------------------------------------------------
+
+export interface TaxWarning {
+  code: string;
+  /** Input it concerns, e.g. "lines.2.gstRate" or "placeOfSupply". */
+  field: string;
+  message: string;
+}
+
+export type Gstr1Section = "b2b" | "b2cl" | "b2cs" | "expWpay" | "expWopay" | "sezWpay" | "sezWopay" | "cdnr" | "cdnur";
+
+export interface Gstr1Info {
+  section: Gstr1Section | null;
+  label: string | null;
+  /** Exempt, nil-rated or non-GST lines reported in table 8. */
+  nilTable: boolean;
+}
+
+export interface HsnSuggestion {
+  code: string;
+  kind: "goods" | "service";
+  description: string;
+  conditional: boolean;
+  taxCategory: TaxCategory;
+  rateBp: number;
+  since: string | null;
+  source: string | null;
+}
+
+export interface RulePackInfo {
+  version: string;
+  published: string;
+  note: string | null;
+  hsnEntries: number;
+  sources: { id: string; title: string; detail: string | null }[];
 }
 
 // ---------------------------------------------------------------------------
@@ -395,6 +451,8 @@ export interface SalesDocument {
   updatedAt: string;
   issuedAt: string | null;
   cancelledAt: string | null;
+  /** GST rule pack the tax was computed with; null before Phase 2.1. */
+  rulePackVersion: string | null;
 }
 
 export interface SalesLine {
@@ -440,6 +498,7 @@ export interface SalesDocumentView extends SalesDocument {
   original: DocumentRef | null;
   creditNotes: DocumentRef[];
   creditedPaise: number;
+  gstr1: Gstr1Info;
 }
 
 export interface SalesLineInput {
@@ -499,6 +558,9 @@ export interface SalesCalculation {
   lines: (LineCalc | null)[];
   totals: TotalsCalc;
   numberPreview: string | null;
+  warnings: TaxWarning[];
+  gstr1: Gstr1Info | null;
+  rulePackVersion: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -553,6 +615,7 @@ export interface PurchaseDocument {
   updatedAt: string;
   recordedAt: string | null;
   cancelledAt: string | null;
+  rulePackVersion: string | null;
 }
 
 export interface PurchaseLine {
@@ -661,6 +724,8 @@ export interface PurchaseCalculation {
   totals: TotalsCalc;
   reverseChargeTaxPaise: number;
   numberPreview: string | null;
+  warnings: TaxWarning[];
+  rulePackVersion: string;
 }
 
 export interface AttachmentContent {
@@ -1278,6 +1343,8 @@ export const api = {
     call<Party>("update_party", { id, input, expectedVersion }),
 
   itemOptions: () => call<ItemOptions>("item_options"),
+  hsnLookup: (query: string, date?: string) => call<HsnSuggestion[]>("hsn_lookup", { query, date: date ?? null }),
+  rulePackInfo: () => call<RulePackInfo>("rule_pack_info"),
   listItems: () => call<Item[]>("list_items"),
   createItem: (input: ItemInput) => call<Item>("create_item", { input }),
   updateItem: (id: string, input: ItemInput, expectedVersion: number) =>

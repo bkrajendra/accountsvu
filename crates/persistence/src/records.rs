@@ -225,6 +225,8 @@ pub struct SalesDocumentRecord {
     pub updated_at: String,
     pub issued_at: Option<String>,
     pub cancelled_at: Option<String>,
+    /// GST rule pack the tax was computed with (Phase 2.1); `None` before.
+    pub rule_pack_version: Option<String>,
 }
 
 #[derive(Clone, Debug, FromRow, Serialize)]
@@ -298,6 +300,8 @@ pub struct PurchaseDocumentRecord {
     pub updated_at: String,
     pub recorded_at: Option<String>,
     pub cancelled_at: Option<String>,
+    /// GST rule pack the tax was computed with (Phase 2.1); `None` before.
+    pub rule_pack_version: Option<String>,
 }
 
 #[derive(Clone, Debug, FromRow, Serialize)]

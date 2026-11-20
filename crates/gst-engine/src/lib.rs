@@ -1,14 +1,18 @@
 //! GST tax calculation (spec §5.6, D11).
 //!
-//! Phase 1 covers the per-line component split for ordinary intra-state and
-//! inter-state supplies. Effective-dated rule packs, place-of-supply
-//! determination and return workpapers arrive in Phase 2.
+//! Per-line component split and document totals, the versioned rule pack
+//! (`rules`), and document review: warnings and GSTR-1 placement (`checks`).
+//! Return workpapers follow in later Phase 2 steps.
 
 use av_domain::{Money, StateCode};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 
+pub mod checks;
 pub mod invoice;
+pub mod rules;
+
+pub use rules::RulePack;
 
 /// A GST rate in basis points (`1800` = 18%).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -21,36 +25,10 @@ impl TaxRate {
     }
 }
 
-/// GST rates (basis points) accepted on items until the versioned rule pack
-/// arrives in Phase 2 (D12). `legacy` rates apply only to periods before the
-/// September 2025 rate rationalisation.
-pub const KNOWN_RATES: &[(u32, bool)] = &[
-    (0, false),
-    (10, false),  // 0.1% — merchant exports
-    (25, false),  // 0.25% — rough diamonds and precious stones
-    (100, false), // 1%
-    (150, false), // 1.5% — cut and polished diamonds
-    (300, false), // 3% — gold, silver, jewellery
-    (500, false),
-    (600, true),
-    (750, false), // 7.5% — specified services
-    (1200, true),
-    (1800, false),
-    (2800, true),
-    (4000, false), // 40% — demerit goods
-];
-
 impl TaxRate {
-    /// Whether this is a rate the rule pack knows about.
+    /// Whether the bundled rule pack knows this slab (on any date).
     pub fn is_known(self) -> bool {
-        KNOWN_RATES.iter().any(|(bp, _)| *bp == self.0)
-    }
-
-    /// Whether this rate only applies to periods before September 2025.
-    pub fn is_legacy(self) -> bool {
-        KNOWN_RATES
-            .iter()
-            .any(|(bp, legacy)| *bp == self.0 && *legacy)
+        RulePack::bundled().is_known_rate(self.0)
     }
 }
 

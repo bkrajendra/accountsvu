@@ -22,6 +22,7 @@ import { Field, Select, TextInput, Toggle } from "../../components/form";
 import { Combobox } from "../../components/Combobox";
 import { CellInput, useDebounced } from "../../components/editor";
 import { Dialog } from "../../components/Dialog";
+import { WarningList, documentWarnings, rateLabel, warningsFor } from "../../components/TaxWarnings";
 
 interface LineDraft {
   key: string;
@@ -300,7 +301,7 @@ function Editor({ initial, existing, original }: { initial: Draft; existing?: Sa
     .filter((i: Item) => i.isActive)
     .map((i) => ({ id: i.id, label: i.name, detail: [i.code, i.hsnSac, i.taxCategory === "taxable" ? formatRate(i.gstRateBp) : null].filter(Boolean).join(" · "), keywords: i.description ?? "" }));
   const taxOptions = [
-    ...(options?.gstRates.filter((r) => r.basisPoints > 0).map((r) => ({ value: `taxable:${percent(r.basisPoints)}`, label: `${formatRate(r.basisPoints)}${r.legacy ? " (old)" : ""}` })) ?? []),
+    ...(options?.gstRates.filter((r) => r.basisPoints > 0).map((r) => ({ value: `taxable:${percent(r.basisPoints)}`, label: rateLabel(r, d.docDate) })) ?? []),
     { value: "exempt", label: "Exempt" },
     { value: "nil_rated", label: "Nil-rated" },
     { value: "non_gst", label: "Non-GST" },
@@ -442,6 +443,7 @@ function Editor({ initial, existing, original }: { initial: Draft; existing?: Sa
                 {d.lines.map((l, i) => {
                   const lc = kept.includes(i) ? (calc?.lines[kept.indexOf(i)] ?? null) : null;
                   const errs = lineErrors(i);
+                  const warns = kept.includes(i) ? warningsFor(calc?.warnings, kept.indexOf(i)) : [];
                   const has = (f: string) => !!err[`lines.${i}.${f}`];
                   return [
                     <tr key={l.key} data-line={l.key} className="align-top">
@@ -494,15 +496,16 @@ function Editor({ initial, existing, original }: { initial: Draft; existing?: Sa
                         </button>
                       </td>
                     </tr>,
-                    errs.length > 0 && (
+                    (errs.length > 0 || warns.length > 0) && (
                       <tr key={`${l.key}-err`}>
                         <td />
-                        <td colSpan={8} className="px-2 pb-2">
+                        <td colSpan={8} className="space-y-0.5 px-2 pb-2">
                           {errs.map((m) => (
                             <p key={m} className="flex items-center gap-1.5 text-[12px] text-danger" role="alert">
                               <AlertCircle size={12} /> {m}
                             </p>
                           ))}
+                          <WarningList warnings={warns} className="space-y-0.5" />
                         </td>
                       </tr>
                     ),
@@ -612,8 +615,22 @@ function Summary({ calc, credit }: { calc?: SalesCalculation; credit: boolean })
       </div>
       {!!t?.totalPaise && <p className="mt-2 text-[12px] leading-snug text-muted">{amountInWords(t.totalPaise)}</p>}
       {calc && !calc.supplyKind && <p className="mt-3 text-[12px] text-subtle">Choose a customer to work out CGST/SGST or IGST.</p>}
+      {calc?.gstr1 && (calc.gstr1.label || calc.gstr1.nilTable) && (
+        <div className="mt-4 border-t border-line pt-3 text-[12.5px]">
+          <div className="text-muted">Reported in GSTR-1</div>
+          <div className="mt-0.5 font-medium">
+            {[calc.gstr1.label, calc.gstr1.nilTable ? "Nil/exempt/non-GST (table 8)" : null].filter(Boolean).join(" · ")}
+          </div>
+        </div>
+      )}
+      <WarningList warnings={documentWarnings(calc?.warnings)} className="mt-3 space-y-1" />
+      {!!calc?.warnings.length && (
+        <p className="mt-2 text-[11.5px] text-subtle">
+          {calc.warnings.length === 1 ? "1 point" : `${calc.warnings.length} points`} to check. They don't stop you issuing.
+        </p>
+      )}
       <div className="mt-4">
-        <Badge>Calculated by the GST engine</Badge>
+        <Badge>{calc ? `GST engine · rules ${calc.rulePackVersion}` : "Calculated by the GST engine"}</Badge>
       </div>
     </Card>
   );

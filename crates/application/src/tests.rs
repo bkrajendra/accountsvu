@@ -56,7 +56,7 @@ async fn fresh_install_health_and_dashboard() {
     let core = core().await;
     let h = core.health().await.unwrap();
     assert!(!h.organisation_configured);
-    assert_eq!(h.schema_version, 8);
+    assert_eq!(h.schema_version, 9);
     let d = core
         .dashboard_summary(&ctx(), "2026-11-01", "2026-11-30")
         .await
@@ -3440,7 +3440,7 @@ async fn backup_restores_on_a_clean_install_and_checks_the_books() {
         .unwrap();
     assert!(backup.file_name.starts_with("Umang-") && backup.file_name.ends_with(".avbackup"));
     assert_eq!(backup.header.business_name, "Umang");
-    assert_eq!(backup.header.schema_version, 8);
+    assert_eq!(backup.header.schema_version, 9);
     let status = s
         .core
         .record_backup(&ctx(), &backup.file_name, &backup.bytes)
@@ -3510,4 +3510,96 @@ async fn backup_restores_on_a_clean_install_and_checks_the_books() {
     );
     s.core.close().await;
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+// ---------------------------------------------------------------------------
+// Phase 2.1: rule pack checks and GSTR-1 placement
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn rule_pack_checks_and_gstr1_placement() {
+    use av_gst_engine::RulePack;
+    use av_gst_engine::checks::Gstr1Section;
+
+    let s = shop().await;
+    // Unregistered, intra-state: B2C small, no warnings, pack recorded.
+    let ok = invoice(
+        &s.customer,
+        "2026-11-10",
+        vec![line(Some(&s.laptop), "1", "1000", "18")],
+    );
+    let calc = s.core.calculate_sales(&ctx(), ok.clone()).await.unwrap();
+    assert!(calc.warnings.is_empty(), "{:?}", calc.warnings);
+    assert_eq!(calc.gstr1.unwrap().section, Some(Gstr1Section::B2cs));
+    assert_eq!(calc.rule_pack_version, RulePack::bundled().version);
+    let v = s
+        .core
+        .issue_sales_document(&ctx(), None, ok, None)
+        .await
+        .unwrap();
+    assert_eq!(
+        v.document.rule_pack_version.as_deref(),
+        Some(RulePack::bundled().version.as_str())
+    );
+    assert_eq!(v.gstr1.section, Some(Gstr1Section::B2cs));
+    let again = s
+        .core
+        .get_sales_document(&ctx(), &v.document.id)
+        .await
+        .unwrap();
+    assert_eq!(again.gstr1.label, Some("B2C small (table 7)"));
+
+    // 28% after it was withdrawn: a warning on the line, not an error.
+    let mut ac = line(None, "1", "40000", "28");
+    ac.hsn_sac = Some("84151010".into());
+    ac.description = "Split air conditioner".into();
+    let calc = s
+        .core
+        .calculate_sales(&ctx(), invoice(&s.karnataka, "2026-11-11", vec![ac]))
+        .await
+        .unwrap();
+    assert_eq!(calc.warnings.len(), 1, "{:?}", calc.warnings);
+    assert_eq!(calc.warnings[0].code, "rate_not_in_force");
+    assert_eq!(calc.warnings[0].field, "lines.0.gstRate");
+    assert!(calc.totals.total_paise > 0, "still computed");
+
+    // Inter-state to an unregistered buyer above ₹1 lakh: B2C large.
+    let big = invoice(
+        &s.karnataka,
+        "2026-11-12",
+        vec![line(Some(&s.laptop), "1", "150000", "18")],
+    );
+    let calc = s.core.calculate_sales(&ctx(), big).await.unwrap();
+    assert_eq!(calc.gstr1.unwrap().section, Some(Gstr1Section::B2cl));
+
+    // Registered buyer from Karnataka billed with Maharashtra as place of
+    // supply: B2B, and a place-of-supply warning.
+    let ka = "29AAPFU0939F1Z".to_owned();
+    let ka = format!("{ka}{}", check_char(&ka));
+    let acme = s
+        .core
+        .create_party(
+            &ctx(),
+            PartyInput {
+                gst_type: "regular".into(),
+                gstin: Some(ka),
+                ..customer("Acme Retail")
+            },
+        )
+        .await
+        .unwrap()
+        .party
+        .id;
+    let mut b2b = invoice(
+        &acme,
+        "2026-11-12",
+        vec![line(Some(&s.laptop), "1", "1000", "18")],
+    );
+    b2b.place_of_supply = Some(27);
+    let calc = s.core.calculate_sales(&ctx(), b2b).await.unwrap();
+    assert_eq!(calc.gstr1.unwrap().section, Some(Gstr1Section::B2b));
+    assert_eq!(
+        calc.warnings.iter().map(|w| w.code).collect::<Vec<_>>(),
+        vec!["place_of_supply"]
+    );
 }

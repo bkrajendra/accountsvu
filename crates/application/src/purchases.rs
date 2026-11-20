@@ -14,8 +14,9 @@ use av_domain::{
     DocumentType, FinancialYear, ItemKind, Money, PartyGstType, PartyKind, SeriesFormat, StateCode,
     TaxCategory, new_id,
 };
+use av_gst_engine::checks::{LineFacts, TaxWarning, line_warnings};
 use av_gst_engine::invoice::{LineInput, Supply, compute_document, line_amount};
-use av_gst_engine::{SupplyKind, TaxRate};
+use av_gst_engine::{RulePack, SupplyKind, TaxRate};
 use av_persistence::records::{
     AccountRecord, AttachmentRecord, OrganisationRecord, PurchaseDocumentRecord, PurchaseLineRecord,
 };
@@ -181,6 +182,9 @@ pub struct PurchaseCalculation {
     /// Tax the business pays itself under reverse charge.
     pub reverse_charge_tax_paise: i64,
     pub number_preview: Option<String>,
+    /// Rate checks against the rule pack; never blocking.
+    pub warnings: Vec<TaxWarning>,
+    pub rule_pack_version: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -434,6 +438,7 @@ struct Prepared {
     doc: PurchaseDocumentRecord,
     lines: Vec<PurchaseLineRecord>,
     reverse_charge_tax: i64,
+    warnings: Vec<TaxWarning>,
 }
 
 impl<S: Store> AppCore<S> {
@@ -944,6 +949,33 @@ impl<S: Store> AppCore<S> {
             updated_at: now,
             recorded_at: None,
             cancelled_at: None,
+            rule_pack_version: Some(RulePack::bundled().version.clone()),
+        };
+        // Rates are checked on the supplier's invoice date when known.
+        let rate_date = doc
+            .supplier_invoice_date
+            .as_deref()
+            .unwrap_or(&doc.doc_date);
+        let warnings = match NaiveDate::parse_from_str(rate_date, "%Y-%m-%d") {
+            Ok(date) => records
+                .iter()
+                .enumerate()
+                .filter_map(|(i, l)| {
+                    let category = TaxCategory::parse(&l.tax_category)?;
+                    Some(line_warnings(
+                        RulePack::bundled(),
+                        date,
+                        i,
+                        LineFacts {
+                            hsn: l.hsn_sac.as_deref(),
+                            category,
+                            rate_bp: u32::try_from(l.gst_rate_bp).unwrap_or(0),
+                        },
+                    ))
+                })
+                .flatten()
+                .collect(),
+            Err(_) => Vec::new(),
         };
         let ok = e.is_empty();
         let reverse_charge_tax = if reverse_charge { tax_total } else { 0 };
@@ -953,6 +985,7 @@ impl<S: Store> AppCore<S> {
                 doc,
                 lines: records,
                 reverse_charge_tax,
+                warnings,
             }),
         ))
     }
@@ -1128,6 +1161,8 @@ impl<S: Store> AppCore<S> {
                 },
                 reverse_charge_tax_paise: p.reverse_charge_tax,
                 number_preview: self.purchase_number_preview(&mut uow, &org, d).await?,
+                warnings: p.warnings.clone(),
+                rule_pack_version: RulePack::bundled().version.clone(),
             });
         }
         // Incomplete: reuse the sales calculator for per-line figures, with
@@ -1160,6 +1195,8 @@ impl<S: Store> AppCore<S> {
             totals: c.totals,
             reverse_charge_tax_paise: 0,
             number_preview: None,
+            warnings: Vec::new(),
+            rule_pack_version: c.rule_pack_version,
         })
     }
 

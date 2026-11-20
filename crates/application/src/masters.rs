@@ -145,7 +145,40 @@ pub struct UnitOption {
 #[serde(rename_all = "camelCase")]
 pub struct RateOption {
     pub basis_points: u32,
+    /// Not chargeable today (e.g. 12%/28% after 21 Sep 2025); still offered
+    /// for documents dated when it applied.
     pub legacy: bool,
+    pub label: String,
+    /// Dates the slab applies (inclusive), `YYYY-MM-DD`.
+    pub from: Option<String>,
+    pub to: Option<String>,
+    pub note: Option<String>,
+}
+
+/// An HSN/SAC entry from the rule pack with its rate on a date.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HsnSuggestion {
+    pub code: String,
+    pub kind: ItemKind,
+    pub description: String,
+    /// The rate depends on value, packaging or recipient.
+    pub conditional: bool,
+    pub tax_category: TaxCategory,
+    pub rate_bp: u32,
+    /// When the current rate started, `YYYY-MM-DD`.
+    pub since: Option<String>,
+    pub source: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RulePackInfo {
+    pub version: String,
+    pub published: String,
+    pub note: Option<String>,
+    pub hsn_entries: usize,
+    pub sources: Vec<av_gst_engine::rules::Source>,
 }
 
 // ---------------------------------------------------------------------------
@@ -829,13 +862,61 @@ impl<S: Store> AppCore<S> {
                 .iter()
                 .map(|(code, label)| UnitOption { code, label })
                 .collect(),
-            gst_rates: av_gst_engine::KNOWN_RATES
-                .iter()
-                .map(|(bp, legacy)| RateOption {
-                    basis_points: *bp,
-                    legacy: *legacy,
+            gst_rates: {
+                let pack = av_gst_engine::RulePack::bundled();
+                let today = self.today();
+                let ymd =
+                    |d: Option<chrono::NaiveDate>| d.map(|d| d.format("%Y-%m-%d").to_string());
+                pack.rates
+                    .iter()
+                    .map(|r| RateOption {
+                        basis_points: r.bp,
+                        legacy: pack.rate_status(r.bp, today)
+                            != av_gst_engine::rules::RateStatus::InForce,
+                        label: r.label.clone(),
+                        from: ymd(r.from),
+                        to: ymd(r.to),
+                        note: r.note.clone(),
+                    })
+                    .collect()
+            },
+        }
+    }
+
+    /// Rule-pack HSN/SAC entries matching a code prefix or words, with the
+    /// rate on `date` (today when not given).
+    pub fn hsn_lookup(&self, query: &str, date: Option<chrono::NaiveDate>) -> Vec<HsnSuggestion> {
+        let pack = av_gst_engine::RulePack::bundled();
+        let date = date.unwrap_or_else(|| self.today());
+        pack.search_hsn(query, 12)
+            .into_iter()
+            .filter_map(|h| {
+                let rate = h
+                    .rates
+                    .iter()
+                    .find(|r| r.from.is_none_or(|f| date >= f) && r.to.is_none_or(|t| date <= t))?;
+                Some(HsnSuggestion {
+                    code: h.code.clone(),
+                    kind: h.kind,
+                    description: h.description.clone(),
+                    conditional: h.conditional,
+                    tax_category: rate.category,
+                    rate_bp: rate.bp,
+                    since: rate.from.map(|d| d.format("%Y-%m-%d").to_string()),
+                    source: pack.source(&rate.source).map(|s| s.title.clone()),
                 })
-                .collect(),
+            })
+            .collect()
+    }
+
+    pub fn rule_pack_info(&self) -> RulePackInfo {
+        let pack = av_gst_engine::RulePack::bundled();
+        RulePackInfo {
+            version: pack.version.clone(),
+            published: pack.published.format("%Y-%m-%d").to_string(),
+            note: pack.note.clone(),
+            hsn_entries: pack.hsn.len(),
+            sources: pack.sources.clone(),
         }
     }
 
