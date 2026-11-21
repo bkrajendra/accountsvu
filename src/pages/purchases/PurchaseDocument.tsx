@@ -125,6 +125,7 @@ export function PurchaseDocument() {
                     <td className="px-4 py-2.5">
                       <div className="flex items-center gap-2">
                         <Badge tone={ITC_LABEL[l.itcStatus].tone}>{ITC_LABEL[l.itcStatus].label}</Badge>
+                        {l.itcCommon && <Badge tone="accent">Common · rule 42</Badge>}
                         {recorded && l.itcStatus !== "na" && (
                           <button type="button" className="text-[12.5px] text-accent hover:underline" onClick={() => setReviewing(l)}>
                             {l.itcStatus === "pending" ? "Review" : "Change"}
@@ -220,6 +221,7 @@ function ItcDialog({ doc, line, onClose }: { doc: PurchaseDocumentView; line: Pu
     status: line.itcStatus === "na" ? "pending" : line.itcStatus,
     reason: line.itcReason ?? "",
     eligible: paiseToInput(line.itcEligiblePaise),
+    common: line.itcCommon,
   });
   const save = useSave((x: ItcReviewInput) => api.reviewItc(doc.id, line.id, x, doc.rowVersion), {
     invalidate: [keys.purchases, keys.purchase(doc.id)],
@@ -263,6 +265,22 @@ function ItcDialog({ doc, line, onClose }: { doc: PurchaseDocumentView; line: Pu
           <Field label="Claimable amount (₹)" error={err.itcEligible} hint={`Out of ${formatPaise(tax(line))}.`}>
             {(p) => <TextInput id={p.id} invalid={p.invalid} className="num" inputMode="decimal" value={f.eligible ?? ""} onChange={(e) => setF((x) => ({ ...x, eligible: e.target.value }))} />}
           </Field>
+        )}
+        {(f.status === "eligible" || f.status === "partial") && (
+          <label className="flex items-start gap-2.5 text-[13.5px]">
+            <input
+              type="checkbox"
+              className="mt-[3px] size-4 accent-[var(--accent-fill)]"
+              checked={!!f.common}
+              onChange={(e) => setF((x) => ({ ...x, common: e.target.checked }))}
+            />
+            <span>
+              Common credit (rule 42)
+              <span className="block text-[12.5px] text-muted">
+                Used for both taxable and exempt supplies. GSTR-3B reverses the exempt share each month.
+              </span>
+            </span>
+          </label>
         )}
         {(f.status === "partial" || f.status === "ineligible") && (
           <Field label="Reason" error={err.itcReason}>

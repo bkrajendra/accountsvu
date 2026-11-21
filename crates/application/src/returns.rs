@@ -87,6 +87,12 @@ pub struct PeriodSummary {
     pub error_count: usize,
     pub warning_count: usize,
     pub output_tax: TaxTotals,
+    pub gstr3b_due: String,
+    pub gstr3b_status: &'static str,
+    /// Net ITC (4C) claimed in the month.
+    pub net_itc_paise: i64,
+    /// Proposed cash payment (6.1), reverse charge included.
+    pub cash_payable_paise: i64,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -241,13 +247,13 @@ pub struct Gstr1File {
 // ---------------------------------------------------------------------------
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct Period {
-    year: i32,
-    month: u32,
+pub(crate) struct Period {
+    pub(crate) year: i32,
+    pub(crate) month: u32,
 }
 
 impl Period {
-    fn parse(s: &str) -> AppResult<Period> {
+    pub(crate) fn parse(s: &str) -> AppResult<Period> {
         let bad = || AppError::Invalid("choose a return period".into());
         let (y, m) = s.trim().split_once('-').ok_or_else(bad)?;
         let year: i32 = y.parse().map_err(|_| bad())?;
@@ -258,22 +264,22 @@ impl Period {
         Ok(Period { year, month })
     }
 
-    fn of(d: NaiveDate) -> Period {
+    pub(crate) fn of(d: NaiveDate) -> Period {
         Period {
             year: d.year(),
             month: d.month(),
         }
     }
 
-    fn code(self) -> String {
+    pub(crate) fn code(self) -> String {
         format!("{}-{:02}", self.year, self.month)
     }
 
-    fn first(self) -> NaiveDate {
+    pub(crate) fn first(self) -> NaiveDate {
         NaiveDate::from_ymd_opt(self.year, self.month, 1).expect("valid month")
     }
 
-    fn next(self) -> Period {
+    pub(crate) fn next(self) -> Period {
         if self.month == 12 {
             Period {
                 year: self.year + 1,
@@ -287,26 +293,35 @@ impl Period {
         }
     }
 
-    fn last(self) -> NaiveDate {
+    pub(crate) fn last(self) -> NaiveDate {
         self.next()
             .first()
             .pred_opt()
             .expect("not the minimum date")
     }
 
-    fn label(self) -> String {
+    pub(crate) fn label(self) -> String {
         self.first().format("%B %Y").to_string()
     }
 
     /// GSTR-1 (monthly) is due on the 11th of the following month.
-    fn gstr1_due(self) -> NaiveDate {
+    pub(crate) fn gstr1_due(self) -> NaiveDate {
         self.next().first().with_day(11).expect("11th exists")
     }
 
-    fn status(self, today: NaiveDate) -> &'static str {
+    pub(crate) fn status(self, today: NaiveDate) -> &'static str {
+        self.status_by(today, self.gstr1_due())
+    }
+
+    /// GSTR-3B (monthly) is due on the 20th of the following month.
+    pub(crate) fn gstr3b_due(self) -> NaiveDate {
+        self.next().first().with_day(20).expect("20th exists")
+    }
+
+    pub(crate) fn status_by(self, today: NaiveDate, due: NaiveDate) -> &'static str {
         if today <= self.last() {
             "open"
-        } else if today <= self.gstr1_due() {
+        } else if today <= due {
             "due"
         } else {
             "past_due"
@@ -314,11 +329,11 @@ impl Period {
     }
 }
 
-fn iso(d: NaiveDate) -> String {
+pub(crate) fn iso(d: NaiveDate) -> String {
     d.format("%Y-%m-%d").to_string()
 }
 
-fn state_name(code: i64) -> String {
+pub(crate) fn state_name(code: i64) -> String {
     u8::try_from(code)
         .ok()
         .and_then(|c| StateCode::new(c).ok())
@@ -338,7 +353,7 @@ fn state_name(code: i64) -> String {
 // Building the workpaper
 // ---------------------------------------------------------------------------
 
-type Doc = (SalesDocumentRecord, Vec<SalesLineRecord>);
+pub(crate) type Doc = (SalesDocumentRecord, Vec<SalesLineRecord>);
 
 /// Taxable lines grouped by rate (SGST and UTGST together).
 fn rate_items(lines: &[SalesLineRecord]) -> Vec<RateItem> {
@@ -418,12 +433,17 @@ struct SeriesAcc {
     cancelled: u32,
 }
 
-struct Built {
-    view: Gstr1View,
-    portal: Gstr1Return,
+pub(crate) struct Built {
+    pub(crate) view: Gstr1View,
+    pub(crate) portal: Gstr1Return,
 }
 
-fn build(reg: &RegistrationRecord, docs: &[Doc], period: Period, today: NaiveDate) -> Built {
+pub(crate) fn build(
+    reg: &RegistrationRecord,
+    docs: &[Doc],
+    period: Period,
+    today: NaiveDate,
+) -> Built {
     let pack = RulePack::bundled();
     let (from, to) = (iso(period.first()), iso(period.last()));
     let by_id: HashMap<&str, &SalesDocumentRecord> =
@@ -1037,7 +1057,7 @@ fn build(reg: &RegistrationRecord, docs: &[Doc], period: Period, today: NaiveDat
     Built { view, portal }
 }
 
-fn add_totals(mut a: TaxTotals, b: TaxTotals, sign: i64) -> TaxTotals {
+pub(crate) fn add_totals(mut a: TaxTotals, b: TaxTotals, sign: i64) -> TaxTotals {
     a.taxable_paise += sign * b.taxable_paise;
     a.igst_paise += sign * b.igst_paise;
     a.cgst_paise += sign * b.cgst_paise;
@@ -1060,7 +1080,11 @@ fn doc_word(d: &SalesDocumentRecord) -> &'static str {
 // ---------------------------------------------------------------------------
 
 impl<S: Store> AppCore<S> {
-    async fn load_return_docs(&self, uow: &mut S::Uow, org_id: &str) -> AppResult<Vec<Doc>> {
+    pub(crate) async fn load_return_docs(
+        &self,
+        uow: &mut S::Uow,
+        org_id: &str,
+    ) -> AppResult<Vec<Doc>> {
         let mut out = Vec::new();
         for d in uow.list_sales(org_id).await? {
             let lines = if d.status == "issued" {
@@ -1073,7 +1097,7 @@ impl<S: Store> AppCore<S> {
         Ok(out)
     }
 
-    async fn return_registration(
+    pub(crate) async fn return_registration(
         &self,
         uow: &mut S::Uow,
         org_id: &str,
@@ -1133,10 +1157,14 @@ impl<S: Store> AppCore<S> {
         let mut periods = Vec::new();
         if let Some(reg) = &reg {
             let docs = self.load_return_docs(&mut uow, &org.id).await?;
+            let purchases = self.load_return_purchases(&mut uow, &org.id).await?;
+            let chain = Self::chain_start(&org.books_start_date, first.first());
+            let series = crate::gstr3b::build_3b_series(reg, &docs, &purchases, chain, last, today);
             let mut p = first;
             while p.first() <= last.first() && p.first() <= fy.end_date() {
                 let built = build(reg, &docs, p, today);
                 let v = built.view;
+                let three_b = series.iter().find(|x| x.period == v.period);
                 let in_period = docs.iter().filter(|(d, _)| {
                     d.gst_registration_id.as_deref() == Some(reg.id.as_str())
                         && d.doc_date >= v.from
@@ -1170,6 +1198,10 @@ impl<S: Store> AppCore<S> {
                         .filter(|e| e.severity != "error")
                         .count(),
                     output_tax: v.totals,
+                    gstr3b_due: iso(p.gstr3b_due()),
+                    gstr3b_status: p.status_by(today, p.gstr3b_due()),
+                    net_itc_paise: three_b.map_or(0, |x| x.itc_net.total()),
+                    cash_payable_paise: three_b.map_or(0, |x| x.offset.cash_total),
                 });
                 p = p.next();
             }

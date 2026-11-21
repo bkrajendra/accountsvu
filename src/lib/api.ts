@@ -646,6 +646,8 @@ export interface PurchaseLine {
   itcEligiblePaise: number;
   itcReviewedAt: string | null;
   itcReviewedBy: string | null;
+  /** Common credit under rule 42 (used for taxable and exempt supplies). */
+  itcCommon: boolean;
 }
 
 export interface PurchaseSummary extends PurchaseDocument {
@@ -699,6 +701,7 @@ export interface PurchaseLineInput {
   itcStatus?: Exclude<ItcStatus, "na">;
   itcReason?: string;
   itcEligible?: string;
+  itcCommon?: boolean;
 }
 
 export interface PurchaseDocumentInput {
@@ -738,6 +741,7 @@ export interface ItcReviewInput {
   status: Exclude<ItcStatus, "na">;
   reason?: string;
   eligible?: string;
+  common?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -1332,6 +1336,12 @@ export interface ReturnPeriod {
   errorCount: number;
   warningCount: number;
   outputTax: TaxTotals;
+  gstr3bDue: string;
+  gstr3bStatus: PeriodStatus;
+  /** Net ITC (table 4C) claimed in the month. */
+  netItcPaise: number;
+  /** Proposed cash payment (table 6.1), reverse charge included. */
+  cashPayablePaise: number;
 }
 
 export interface ReturnCentre {
@@ -1444,6 +1454,90 @@ export interface Gstr1 {
   nil: NilRow[];
   hsn: HsnRow[];
   series: DocSeriesRow[];
+  exceptions: ReturnException[];
+}
+
+/** Amounts per tax head; SGST includes UTGST. */
+export interface Heads {
+  igst: number;
+  cgst: number;
+  sgst: number;
+  cess: number;
+}
+
+export interface Gstr3bRow {
+  key: string;
+  label: string;
+  taxablePaise: number;
+  tax: Heads;
+}
+
+export interface HeadPayment {
+  liability: number;
+  byCredit: Heads;
+  cash: number;
+}
+
+export interface OffsetProposal {
+  igst: HeadPayment;
+  cgst: HeadPayment;
+  sgst: HeadPayment;
+  cess: HeadPayment;
+  reverseCharge: Heads;
+  carryForward: Heads;
+  cashTotal: number;
+}
+
+export interface Gstr3bItcLine {
+  documentId: string;
+  docType: string;
+  supplierInvoice: string | null;
+  docDate: string;
+  partyName: string;
+  gstin: string | null;
+  description: string;
+  table: string;
+  status: ItcStatus;
+  reason: string | null;
+  common: boolean;
+  reverseCharge: boolean;
+  tax: Heads;
+  eligible: Heads;
+}
+
+export interface Gstr3b {
+  registrationId: string;
+  gstin: string;
+  stateName: string;
+  period: string;
+  label: string;
+  from: string;
+  to: string;
+  dueDate: string;
+  status: PeriodStatus;
+  outward: Gstr3bRow[];
+  interState: {
+    placeOfSupply: number;
+    placeName: string;
+    unregisteredTaxablePaise: number;
+    unregisteredIgstPaise: number;
+    compositionTaxablePaise: number;
+    compositionIgstPaise: number;
+  }[];
+  itcAvailable: Gstr3bRow[];
+  itcReversed: Gstr3bRow[];
+  itcNet: Heads;
+  itcOther: Gstr3bRow[];
+  inwardExempt: { key: string; label: string; interStatePaise: number; intraStatePaise: number }[];
+  rule42: { commonLines: number; commonCredit: Heads; exemptTurnoverPaise: number; totalTurnoverPaise: number; reversal: Heads };
+  liability: Heads;
+  reverseCharge: Heads;
+  creditBroughtForward: Heads;
+  creditAvailable: Heads;
+  offset: OffsetProposal;
+  crossCheck: { label: string; gstr1Paise: number; gstr3bPaise: number; differencePaise: number }[];
+  itcLines: Gstr3bItcLine[];
+  pendingItc: Heads;
   exceptions: ReturnException[];
 }
 
@@ -1584,6 +1678,9 @@ export const api = {
   gstr1: (registrationId: string, period: string) => call<Gstr1>("gstr1", { registrationId, period }),
   /** Asks where to save the portal JSON; null when cancelled (desktop only). */
   saveGstr1Json: (registrationId: string, period: string) => call<SavedFile | null>("save_gstr1_json", { registrationId, period }),
+  gstr3b: (registrationId: string, period: string) => call<Gstr3b>("gstr3b", { registrationId, period }),
+  /** Asks where to save the Excel workpaper; null when cancelled (desktop only). */
+  saveGstr3bXlsx: (registrationId: string, period: string) => call<SavedFile | null>("save_gstr3b_xlsx", { registrationId, period }),
   booksControl: () => call<BooksControl>("books_control"),
   setBooksLock: (until: string | null, reason?: string) => call<BooksControl>("set_books_lock", { until, reason: reason || null }),
   closeFinancialYear: (code: string) => call<BooksControl>("close_financial_year", { code }),

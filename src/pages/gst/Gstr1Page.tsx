@@ -67,7 +67,7 @@ export function Gstr1Page() {
       </Link>
       <div className="mb-5 flex items-end justify-between gap-4">
         <div>
-          <div className="text-[12px] font-semibold uppercase tracking-[0.08em] text-accent">GSTR-1</div>
+          <ReturnSwitch current="gstr1" period={data.period} reg={data.registrationId} />
           <h1 className="text-display">{data.label}</h1>
           <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[14px] text-muted">
             <span className="num text-fg">{data.gstin}</span> · {data.stateName} · {statusBadge(data.status, data.dueDate)}
@@ -183,7 +183,7 @@ function ExportButton({ data, errors }: { data: Gstr1; errors: number }) {
   );
 }
 
-function Exceptions({ list }: { list: ReturnException[] }) {
+export function Exceptions({ list }: { list: ReturnException[] }) {
   const navigate = useNavigate();
   const [all, setAll] = useState(false);
   const shown = all ? list : list.slice(0, 5);
@@ -443,5 +443,28 @@ function TabBody({ tab, data }: { tab: Tab; data: Gstr1 }) {
         {rows.length === 0 && <Empty cols={9} text={empty[tab] ?? "Nothing this month."} />}
       </tbody>
     </table>
+  );
+}
+
+/** GSTR-1 / GSTR-3B for the same month and GSTIN. */
+export function ReturnSwitch({ current, period, reg }: { current: "gstr1" | "gstr3b"; period: string; reg: string }) {
+  const items = [
+    { id: "gstr1", label: "GSTR-1" },
+    { id: "gstr3b", label: "GSTR-3B" },
+  ] as const;
+  return (
+    <nav aria-label="Return" className="mb-1 flex gap-3 text-[12px] font-semibold uppercase tracking-[0.08em]">
+      {items.map((i) =>
+        i.id === current ? (
+          <span key={i.id} aria-current="page" className="text-accent">
+            {i.label}
+          </span>
+        ) : (
+          <Link key={i.id} to={`/gst/${i.id}/${period}?reg=${reg}`} className="text-subtle hover:text-fg">
+            {i.label}
+          </Link>
+        ),
+      )}
+    </nav>
   );
 }

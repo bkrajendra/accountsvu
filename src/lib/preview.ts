@@ -6,6 +6,11 @@
  */
 import type {
   Gstr1,
+  Gstr3b,
+  Gstr3bRow,
+  HeadPayment,
+  Heads,
+  OffsetProposal,
   ReturnCentre,
   ReturnPeriod,
   TaxTotals as ReturnTotals,
@@ -835,6 +840,183 @@ function previewWorkpaper(regId: string, period: string): Gstr1 {
   };
 }
 
+// GSTR-3B (preview; the Rust workpaper is the real one).
+const H0 = (): Heads => ({ igst: 0, cgst: 0, sgst: 0, cess: 0 });
+const hPlus = (a: Heads, b: Heads, sign = 1): Heads => ({ igst: a.igst + sign * b.igst, cgst: a.cgst + sign * b.cgst, sgst: a.sgst + sign * b.sgst, cess: a.cess + sign * b.cess });
+const hFloor = (a: Heads): Heads => ({ igst: Math.max(0, a.igst), cgst: Math.max(0, a.cgst), sgst: Math.max(0, a.sgst), cess: Math.max(0, a.cess) });
+const hSum = (a: Heads) => a.igst + a.cgst + a.sgst + a.cess;
+const lineHeads = (l: { igstPaise: number; cgstPaise: number; sgstPaise: number; utgstPaise: number; cessPaise: number }): Heads => ({ igst: l.igstPaise, cgst: l.cgstPaise, sgst: l.sgstPaise + l.utgstPaise, cess: l.cessPaise });
+
+function previewPropose(liability: Heads, credit: Heads, rc: Heads): OffsetProposal {
+  const l = hFloor(liability);
+  const c = hFloor(credit);
+  const left = { ...l };
+  const pay = (liab: number): HeadPayment => ({ liability: liab, byCredit: H0(), cash: 0 });
+  const out = { igst: pay(l.igst), cgst: pay(l.cgst), sgst: pay(l.sgst), cess: pay(l.cess) };
+  const use = (from: keyof Heads, to: keyof Heads, cap = Infinity) => {
+    const x = Math.min(c[from], left[to], cap);
+    out[to].byCredit[from] += x;
+    c[from] -= x;
+    left[to] -= x;
+  };
+  use("igst", "igst");
+  const shortC = Math.max(0, left.cgst - c.cgst);
+  const shortS = Math.max(0, left.sgst - c.sgst);
+  use("igst", "cgst", shortC);
+  use("igst", "sgst", shortS);
+  use("igst", "cgst");
+  use("igst", "sgst");
+  use("cgst", "cgst");
+  use("sgst", "sgst");
+  use("cgst", "igst");
+  use("sgst", "igst");
+  use("cess", "cess");
+  for (const k of ["igst", "cgst", "sgst", "cess"] as const) out[k].cash = left[k];
+  const r = hFloor(rc);
+  return { ...out, reverseCharge: r, carryForward: c, cashTotal: hSum(left) + hSum(r) };
+}
+
+function previewGstr3bOne(regId: string, period: string, broughtForward: Heads): Gstr3b {
+  const g1 = previewWorkpaper(regId, period);
+  const ours = (d: { gstRegistrationId: string | null; docDate: string }) => (d.gstRegistrationId ?? regs[0]?.id) === regId && d.docDate >= g1.from && d.docDate <= g1.to;
+  const row = (key: string, label: string): Gstr3bRow => ({ key, label, taxablePaise: 0, tax: H0() });
+  const outward = [
+    row("a", "(a) Outward taxable supplies (other than zero-rated, nil-rated and exempted)"),
+    row("b", "(b) Outward taxable supplies (zero-rated)"),
+    row("c", "(c) Other outward supplies (nil-rated, exempted)"),
+    row("d", "(d) Inward supplies (liable to reverse charge)"),
+    row("e", "(e) Non-GST outward supplies"),
+  ];
+  const add = (rows: Gstr3bRow[], key: string, taxable: number, tax: Heads) => {
+    const r = rows.find((x) => x.key === key)!;
+    r.taxablePaise += taxable;
+    r.tax = hPlus(r.tax, tax);
+  };
+  const interState = new Map<number, Gstr3b["interState"][number]>();
+  for (const d of salesDocs.filter((x) => x.status === "issued" && ours(x))) {
+    const sign = d.docType === "credit_note" ? -1 : 1;
+    const target = salesDocs.find((o) => o.id === d.originalDocumentId) ?? d;
+    const sec = previewGstr1(target, true, false).section ?? "";
+    const zero = sec.startsWith("exp") || sec.startsWith("sez");
+    for (const l of d.lines) {
+      if (l.taxCategory === "taxable" && d.docType !== "bill_of_supply") {
+        const tax = hPlus(H0(), lineHeads(l), sign);
+        add(outward, zero ? "b" : "a", sign * l.taxablePaise, tax);
+        const unreg = !["regular", "sez", "overseas"].includes(d.partyGstType) && d.placeOfSupply !== 96;
+        if (!zero && unreg && d.supplyKind === "inter_state") {
+          const r = interState.get(d.placeOfSupply) ?? { placeOfSupply: d.placeOfSupply, placeName: stateName(d.placeOfSupply), unregisteredTaxablePaise: 0, unregisteredIgstPaise: 0, compositionTaxablePaise: 0, compositionIgstPaise: 0 };
+          if (d.partyGstType === "composition") {
+            r.compositionTaxablePaise += sign * l.taxablePaise;
+            r.compositionIgstPaise += tax.igst;
+          } else {
+            r.unregisteredTaxablePaise += sign * l.taxablePaise;
+            r.unregisteredIgstPaise += tax.igst;
+          }
+          interState.set(d.placeOfSupply, r);
+        }
+      } else add(outward, l.taxCategory === "non_gst" ? "e" : "c", sign * l.taxablePaise, H0());
+    }
+  }
+  const available = [row("1", "(1) Import of goods"), row("2", "(2) Import of services"), row("3", "(3) Inward supplies liable to reverse charge (other than 1 & 2)"), row("4", "(4) Inward supplies from ISD"), row("5", "(5) All other ITC")];
+  const reversed = [row("1", "(1) As per rules 38, 42 & 43 of CGST Rules and section 17(5)"), row("2", "(2) Others")];
+  const itcOther = [row("1", "(1) ITC reclaimed which was reversed under 4B(2) earlier"), row("2", "(2) Ineligible ITC under section 16(4) & ITC restricted due to PoS rules")];
+  const inward = [
+    { key: "exempt", label: "From a supplier under composition scheme, exempt and nil-rated supply", interStatePaise: 0, intraStatePaise: 0 },
+    { key: "non_gst", label: "Non-GST supply", interStatePaise: 0, intraStatePaise: 0 },
+  ];
+  const itcLines: Gstr3b["itcLines"] = [];
+  let pending = H0();
+  let pendingLines = 0;
+  let common = H0();
+  let commonLines = 0;
+  for (const d of purchaseDocs.filter((x) => x.status === "recorded" && ours(x))) {
+    const sign = d.docType === "debit_note" ? -1 : 1;
+    for (const l of d.lines) {
+      const tax = lineHeads(l);
+      if (d.reverseCharge && l.taxCategory === "taxable") add(outward, "d", sign * l.taxablePaise, hPlus(H0(), tax, sign));
+      const col = l.taxCategory === "non_gst" ? 1 : ["nil_rated", "exempt"].includes(l.taxCategory) ? 0 : -1;
+      if (col >= 0) {
+        if (d.supplyKind === "inter_state") inward[col].interStatePaise += sign * l.taxablePaise;
+        else inward[col].intraStatePaise += sign * l.taxablePaise;
+      }
+      if (!hSum(tax) || l.itcStatus === "na" || (!d.partyGstin && !d.reverseCharge)) continue;
+      const table = d.reverseCharge ? (d.partyGstType === "overseas" ? "2" : "3") : "5";
+      const total = hSum(tax);
+      const eligible = l.itcStatus === "eligible" ? tax : l.itcStatus === "partial" ? { igst: Math.round((tax.igst * l.itcEligiblePaise) / total), cgst: Math.round((tax.cgst * l.itcEligiblePaise) / total), sgst: Math.round((tax.sgst * l.itcEligiblePaise) / total), cess: 0 } : H0();
+      if (l.itcStatus === "pending") {
+        pending = hPlus(pending, tax, sign);
+        pendingLines += 1;
+      } else {
+        add(available, table, 0, hPlus(H0(), tax, sign));
+        add(reversed, "1", 0, hPlus(H0(), hPlus(tax, eligible, -1), sign));
+        if (l.itcCommon) {
+          common = hPlus(common, eligible, sign);
+          commonLines += 1;
+        }
+      }
+      itcLines.push({
+        documentId: d.id, docType: d.docType, supplierInvoice: d.supplierInvoiceNumber ?? d.number, docDate: d.docDate, partyName: d.partyName ?? "", gstin: d.partyGstin,
+        description: l.description, table: l.itcStatus === "pending" ? "pending" : `4A(${table})`, status: l.itcStatus, reason: l.itcReason, common: !!l.itcCommon, reverseCharge: d.reverseCharge,
+        tax: hPlus(H0(), tax, sign), eligible: hPlus(H0(), eligible, sign),
+      });
+    }
+  }
+  const val = (k: string) => outward.find((r) => r.key === k)!;
+  const exempt = val("c").taxablePaise + val("e").taxablePaise;
+  const turnover = val("a").taxablePaise + val("b").taxablePaise + exempt;
+  const f = (x: number) => (turnover > 0 && exempt > 0 ? Math.round((Math.max(0, x) * Math.min(exempt, turnover)) / turnover) : 0);
+  const reversal = { igst: f(common.igst), cgst: f(common.cgst), sgst: f(common.sgst), cess: f(common.cess) };
+  if (hSum(reversal)) add(reversed, "1", 0, reversal);
+  const gross = available.reduce((h, r) => hPlus(h, r.tax), H0());
+  const net = hPlus(gross, reversed.reduce((h, r) => hPlus(h, r.tax), H0()), -1);
+  let liability = hPlus(val("a").tax, val("b").tax);
+  let credit = hPlus(broughtForward, net);
+  const negative = hFloor(hPlus(H0(), credit, -1));
+  liability = hPlus(liability, negative);
+  credit = hFloor(credit);
+  const offset = previewPropose(liability, credit, val("d").tax);
+  const nilG1 = g1.nil.reduce((a, n) => a + n.nilPaise + n.exemptPaise + n.nonGstPaise, 0);
+  const ab = (fn: (r: Gstr3bRow) => number) => fn(val("a")) + fn(val("b"));
+  const crossCheck = ([
+    ["Taxable value (3.1 a + b)", g1.totals.taxablePaise, ab((r) => r.taxablePaise)],
+    ["IGST", g1.totals.igstPaise, ab((r) => r.tax.igst)],
+    ["CGST", g1.totals.cgstPaise, ab((r) => r.tax.cgst)],
+    ["SGST/UTGST", g1.totals.sgstPaise, ab((r) => r.tax.sgst)],
+    ["Cess", g1.totals.cessPaise, ab((r) => r.tax.cess)],
+    ["Nil-rated, exempt and non-GST (3.1 c + e)", nilG1, exempt],
+  ] as const).map(([label, a, b]) => ({ label, gstr1Paise: a, gstr3bPaise: b, differencePaise: b - a }));
+  const exceptions: Gstr3b["exceptions"] = [];
+  const rs = (p: number) => `₹${(p / 100).toLocaleString("en-IN", { minimumFractionDigits: 2 })}`;
+  if (pendingLines) exceptions.push({ severity: "warning", code: "itc_pending", message: `${pendingLines} purchase ${pendingLines === 1 ? "line" : "lines"} with ${rs(hSum(pending))} of GST ${pendingLines === 1 ? "is" : "are"} awaiting ITC review, so not claimed. Review them in Purchases to claim.`, documentId: null, number: null });
+  if (hSum(reversal) > 0) exceptions.push({ severity: "warning", code: "rule42", message: `Rule 42: ${rs(hSum(reversal))} of common credit is reversed in 4B(1) for exempt supplies (${rs(exempt)} of ${rs(turnover)} turnover). This is the monthly figure; it is trued up for the year.`, documentId: null, number: null });
+  for (const c of crossCheck) if (c.differencePaise) exceptions.push({ severity: c.label.startsWith("Nil") ? "warning" : "error", code: "gstr1_mismatch", message: `${c.label}: GSTR-1 shows ${rs(c.gstr1Paise)}, GSTR-3B ${rs(c.gstr3bPaise)}.`, documentId: null, number: null });
+  const [y, m] = period.split("-").map(Number);
+  const due = isoLocal(new Date(y, m, 20));
+  const today = isoLocal(new Date());
+  return {
+    registrationId: g1.registrationId, gstin: g1.gstin, stateName: g1.stateName, period, label: g1.label, from: g1.from, to: g1.to,
+    dueDate: due, status: today <= g1.to ? "open" : today <= due ? "due" : "past_due",
+    outward, interState: [...interState.values()], itcAvailable: available, itcReversed: reversed, itcNet: net, itcOther,
+    inwardExempt: inward, rule42: { commonLines, commonCredit: common, exemptTurnoverPaise: exempt, totalTurnoverPaise: turnover, reversal },
+    liability, reverseCharge: val("d").tax, creditBroughtForward: broughtForward, creditAvailable: credit, offset, crossCheck, itcLines, pendingItc: pending,
+    exceptions: exceptions.sort((a, b) => (a.severity === "error" ? 0 : 1) - (b.severity === "error" ? 0 : 1)),
+  };
+}
+
+/** GSTR-3B for a month, chaining credit from the start of the books. */
+function previewGstr3b(regId: string, period: string): Gstr3b {
+  const start = (org?.booksStartDate ?? `${period}-01`).slice(0, 7);
+  let p = start <= period ? start : period;
+  let carry = H0();
+  for (;;) {
+    const v = previewGstr3bOne(regId, p, carry);
+    if (p === period) return v;
+    carry = v.offset.carryForward;
+    const [y, m] = p.split("-").map(Number);
+    p = m === 12 ? `${y + 1}-01` : `${y}-${String(m + 1).padStart(2, "0")}`;
+  }
+}
+
 function previewReturnCentre(regId: string | null, fyCode: string | null): ReturnCentre {
   const active = regs.filter((r) => r.registrationType !== "composition");
   const reg = active.find((r) => r.id === regId) ?? active.find((r) => r.status === "active") ?? active[0] ?? null;
@@ -849,6 +1031,7 @@ function previewReturnCentre(regId: string | null, fyCode: string | null): Retur
       const p = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
       if (`${p}-01` > today) break;
       const w = previewWorkpaper(reg.id, p);
+      const three = previewGstr3b(reg.id, p);
       const inPeriod = salesDocs.filter((x) => (x.gstRegistrationId ?? regs[0]?.id) === reg.id && x.docDate >= w.from && x.docDate <= w.to);
       periods.push({
         period: p,
@@ -862,6 +1045,10 @@ function previewReturnCentre(regId: string | null, fyCode: string | null): Retur
         errorCount: w.exceptions.filter((e) => e.severity === "error").length,
         warningCount: w.exceptions.filter((e) => e.severity !== "error").length,
         outputTax: w.totals,
+        gstr3bDue: three.dueDate,
+        gstr3bStatus: three.status,
+        netItcPaise: hSum(three.itcNet),
+        cashPayablePaise: three.offset.cashTotal,
       });
     }
   }
@@ -1145,7 +1332,7 @@ function writePurchase(id: string | null, input: PurchaseDocumentInput) {
         id: crypto.randomUUID(), documentId: docId, lineNo: i + 1, itemId: l.itemId ?? null, accountId: l.accountId, description: l.description || items.find((x) => x.id === l.itemId)?.name || "",
         hsnSac: l.hsnSac ?? null, unit: l.unit ?? null, quantity: l.quantity, unitPricePaise: toPaise(l.unitPrice) ?? 0, discountPaise: toPaise(l.discount) ?? 0,
         taxCategory: l.taxCategory, gstRateBp: toBp(l.gstRate), cessRateBp: 0, ...lc, itcStatus: itc, itcReason: l.itcReason ?? null,
-        itcEligiblePaise: itc === "eligible" ? tax : itc === "partial" ? (toPaise(l.itcEligible) ?? 0) : 0, itcReviewedAt: null, itcReviewedBy: null,
+        itcEligiblePaise: itc === "eligible" ? tax : itc === "partial" ? (toPaise(l.itcEligible) ?? 0) : 0, itcReviewedAt: null, itcReviewedBy: null, itcCommon: !!l.itcCommon && (itc === "eligible" || itc === "partial"),
       };
     }),
   };
@@ -1191,7 +1378,7 @@ async function purchaseCommand(command: string, args: Record<string, any>): Prom
       if (["eligible", "partial"].includes(st) && !d.partyGstin && !d.reverseCharge) fail([["itcStatus", "Input tax can only be claimed on a registered supplier's tax invoice."]]);
       const eligible = st === "eligible" ? tax : st === "partial" ? (toPaise(args.input.eligible) ?? 0) : 0;
       if (st === "partial" && !(eligible > 0 && eligible < tax)) fail([["itcEligible", "Enter an amount between ₹0 and the line's GST."]]);
-      Object.assign(l, { itcStatus: st, itcReason: args.input.reason || null, itcEligiblePaise: eligible, itcReviewedAt: now(), itcReviewedBy: "owner" });
+      Object.assign(l, { itcStatus: st, itcReason: args.input.reason || null, itcEligiblePaise: eligible, itcReviewedAt: now(), itcReviewedBy: "owner", itcCommon: !!args.input.common && (st === "eligible" || st === "partial") });
       d.rowVersion += 1;
       log("purchase_line.itc_review", l.id, l);
       return purchaseView(d.id);
@@ -1966,6 +2153,10 @@ function reportCommand(command: string, args: Record<string, any>): unknown {
       return previewReturnCentre(args.registrationId ?? null, args.financialYear ?? null);
     case "gstr1":
       return previewWorkpaper(args.registrationId, args.period);
+    case "gstr3b":
+      return previewGstr3b(args.registrationId, args.period);
+    case "save_gstr3b_xlsx":
+      throw { code: "invalid_input", message: "Saving the Excel workpaper runs in the desktop app.", fields: [] } satisfies Fail;
     case "save_gstr1_json":
       throw { code: "invalid_input", message: "Saving the GSTR-1 file runs in the desktop app.", fields: [] } satisfies Fail;
     case "books_control":
@@ -2166,7 +2357,7 @@ function hostCommand(command: string, args: Record<string, any>): unknown {
       throw { code: "invalid_input", message: "The browser preview can't restart. Restoring runs in the desktop app.", fields: [] } satisfies Fail;
     case "check_update":
       return {
-        currentVersion: "0.2.2",
+        currentVersion: "0.2.3",
         version: "0.3.0",
         date: new Date(Date.now() - 86_400_000).toISOString(),
         notes: "AccountsVU 0.3.0 — sample release notes from the browser preview.",
@@ -2190,7 +2381,7 @@ export async function previewBackend(command: string, args: Record<string, any> 
   if (hosted !== undefined) return hosted;
   switch (command) {
     case "app_health":
-      return { appVersion: "0.2.2", schemaVersion: 9, database: "(browser preview — in memory)", organisationConfigured: !!org };
+      return { appVersion: "0.2.3", schemaVersion: 10, database: "(browser preview — in memory)", organisationConfigured: !!org };
     case "dashboard_summary":
       return {
         salesThisMonth: "0", purchasesThisMonth: "0",

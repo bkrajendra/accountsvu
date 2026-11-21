@@ -56,7 +56,7 @@ async fn fresh_install_health_and_dashboard() {
     let core = core().await;
     let h = core.health().await.unwrap();
     assert!(!h.organisation_configured);
-    assert_eq!(h.schema_version, 9);
+    assert_eq!(h.schema_version, 10);
     let d = core
         .dashboard_summary(&ctx(), "2026-11-01", "2026-11-30")
         .await
@@ -2009,6 +2009,7 @@ async fn supplier_bill_posts_payable_and_tracks_itc() {
                 status: "partial".into(),
                 eligible: Some("9000".into()),
                 reason: Some("Common credit, rule 42".into()),
+                common: None,
             },
             v.document.row_version,
         )
@@ -2029,6 +2030,7 @@ async fn supplier_bill_posts_payable_and_tracks_itc() {
                 status: "partial".into(),
                 eligible: Some("3000".into()),
                 reason: Some("Common credit, rule 42".into()),
+                common: Some(true),
             },
             v.document.row_version,
         )
@@ -2036,6 +2038,7 @@ async fn supplier_bill_posts_payable_and_tracks_itc() {
         .unwrap();
     assert_eq!(gst_payable(&b.core).await, Money::from_rupees(15_000));
     assert_eq!(v.lines[0].itc_eligible_paise, 300_000);
+    assert!(v.lines[0].itc_common, "common credit kept with partial ITC");
     let err = b
         .core
         .review_itc(
@@ -3440,7 +3443,7 @@ async fn backup_restores_on_a_clean_install_and_checks_the_books() {
         .unwrap();
     assert!(backup.file_name.starts_with("Umang-") && backup.file_name.ends_with(".avbackup"));
     assert_eq!(backup.header.business_name, "Umang");
-    assert_eq!(backup.header.schema_version, 9);
+    assert_eq!(backup.header.schema_version, 10);
     let status = s
         .core
         .record_backup(&ctx(), &backup.file_name, &backup.bytes)
@@ -3818,4 +3821,160 @@ async fn gstr1_workpaper_return_centre_and_json() {
     let oct = s.core.gstr1(&ctx(), &reg, "2026-10").await.unwrap();
     assert!(oct.documents.is_empty() && oct.exceptions.is_empty());
     assert!(s.core.gstr1(&ctx(), &reg, "2026-13").await.is_err());
+}
+
+#[tokio::test]
+async fn gstr3b_workpaper_offset_and_rule_42() {
+    let b = books().await;
+    let record = |input: PurchaseDocumentInput| {
+        let core = &b.core;
+        async move {
+            core.record_purchase(&ctx(), None, input, None)
+                .await
+                .unwrap()
+        }
+    };
+    // October: ITC with no sales, carried forward to November.
+    let mut oct = bill(
+        &b.supplier,
+        "S-OCT",
+        vec![pline(&b.purchases_acc, "10000", "18", Some("eligible"))],
+    );
+    oct.supplier_invoice_date = Some("2026-10-10".into());
+    oct.doc_date = "2026-10-15".into();
+    record(oct).await;
+
+    // November sales: ₹1,00,000 taxable @ 18% and ₹50,000 exempt (intra-state).
+    let mut exempt = line(None, "1", "50000", "0");
+    exempt.tax_category = "exempt".into();
+    exempt.gst_rate = None;
+    b.core
+        .issue_sales_document(
+            &ctx(),
+            None,
+            invoice(
+                &b.customer,
+                "2026-11-10",
+                vec![line(None, "1", "100000", "18"), exempt],
+            ),
+            None,
+        )
+        .await
+        .unwrap();
+
+    // November purchases.
+    record(bill(
+        &b.supplier,
+        "S-1",
+        vec![pline(&b.purchases_acc, "50000", "18", Some("eligible"))],
+    ))
+    .await;
+    let mut blocked = pline(&b.purchases_acc, "10000", "18", Some("ineligible"));
+    blocked.itc_reason = Some("Blocked u/s 17(5): food and beverages".into());
+    record(bill(&b.supplier, "S-2", vec![blocked])).await;
+    let mut common = pline(&b.purchases_acc, "20000", "18", Some("eligible"));
+    common.itc_common = Some(true);
+    record(bill(&b.supplier, "S-3", vec![common])).await;
+    record(bill(
+        &b.supplier,
+        "S-4",
+        vec![pline(&b.purchases_acc, "1000", "18", None)],
+    ))
+    .await;
+    let mut rcm = bill(
+        &b.unregistered,
+        "LR-1",
+        vec![PurchaseLineInput {
+            hsn_sac: Some("996511".into()),
+            ..pline(&b.rent_acc, "10000", "5", Some("eligible"))
+        }],
+    );
+    rcm.reverse_charge = true;
+    record(rcm).await;
+
+    let centre = b.core.return_centre(&ctx(), None, None).await.unwrap();
+    let reg = centre.registration_id.clone().unwrap();
+    let v = b.core.gstr3b(&ctx(), &reg, "2026-11").await.unwrap();
+    let out = |k: &str| v.outward.iter().find(|r| r.key == k).unwrap().clone();
+    assert_eq!(
+        (out("a").taxable_paise, out("a").tax.cgst, out("a").tax.sgst),
+        (10_000_000, 900_000, 900_000)
+    );
+    assert_eq!(out("c").taxable_paise, 5_000_000);
+    assert_eq!(
+        (out("d").taxable_paise, out("d").tax.total()),
+        (1_000_000, 50_000)
+    );
+
+    let a = |k: &str| v.itc_available.iter().find(|r| r.key == k).unwrap().tax;
+    assert_eq!(
+        (a("5").cgst, a("5").sgst),
+        (720_000, 720_000),
+        "pending line left out"
+    );
+    assert_eq!(a("3").total(), 50_000, "reverse-charge ITC");
+    // Rule 42: common credit ₹3,600 × 50,000 ÷ 1,50,000 = ₹1,200.
+    assert_eq!(v.rule42.common_credit.total(), 360_000);
+    assert_eq!(
+        (
+            v.rule42.exempt_turnover_paise,
+            v.rule42.total_turnover_paise
+        ),
+        (5_000_000, 15_000_000)
+    );
+    assert_eq!(
+        (v.rule42.reversal.cgst, v.rule42.reversal.sgst),
+        (60_000, 60_000)
+    );
+    let rev = v.itc_reversed.iter().find(|r| r.key == "1").unwrap().tax;
+    assert_eq!(
+        (rev.cgst, rev.sgst),
+        (150_000, 150_000),
+        "17(5) plus rule 42"
+    );
+    assert_eq!(v.itc_net.cgst, 720_000 + 25_000 - 150_000);
+    assert_eq!(v.pending_itc.total(), 18_000);
+    assert!(v.exceptions.iter().any(|e| e.code == "itc_pending"));
+    assert!(
+        v.exceptions.iter().all(|e| e.code != "gstr1_mismatch"),
+        "{:?}",
+        v.exceptions
+    );
+
+    // 6.1: October's ₹900 + ₹900 is brought forward; reverse charge is cash.
+    assert_eq!(
+        (v.credit_brought_forward.cgst, v.credit_brought_forward.sgst),
+        (90_000, 90_000)
+    );
+    let credit = 595_000 + 90_000;
+    assert_eq!(v.offset.cgst.by_credit.cgst, credit);
+    assert_eq!(v.offset.cgst.cash, 900_000 - credit);
+    assert_eq!(v.offset.cash_total, 2 * (900_000 - credit) + 50_000);
+    assert_eq!(
+        v.cross_check
+            .iter()
+            .filter(|c| c.difference_paise != 0)
+            .count(),
+        0
+    );
+
+    // The return centre shows the same cash figure and the 20th as due date.
+    let nov = centre
+        .periods
+        .iter()
+        .find(|p| p.period == "2026-11")
+        .unwrap();
+    assert_eq!(nov.cash_payable_paise, v.offset.cash_total);
+    assert_eq!(nov.gstr3b_due, "2026-12-20");
+    let oct = centre
+        .periods
+        .iter()
+        .find(|p| p.period == "2026-10")
+        .unwrap();
+    assert_eq!((oct.net_itc_paise, oct.cash_payable_paise), (180_000, 0));
+
+    // Excel workpaper.
+    let file = b.core.gstr3b_xlsx(&ctx(), &reg, "2026-11").await.unwrap();
+    assert!(file.file_name.ends_with("_112026.xlsx"));
+    assert_eq!(&file.bytes[..2], b"PK", "an xlsx is a zip");
 }

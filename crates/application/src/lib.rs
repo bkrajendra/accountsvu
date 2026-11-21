@@ -9,6 +9,7 @@ mod context;
 pub mod crypto;
 pub mod documents;
 mod error;
+pub mod gstr3b;
 pub mod import;
 pub mod masters;
 mod posting;
@@ -18,6 +19,7 @@ pub mod returns;
 pub mod sales;
 pub mod security;
 pub mod setup;
+mod workpaper_xlsx;
 
 pub use banking::{
     AllocationInput, MoneyAccountInput, MoneyAccountView, MoneyBookView, OpenDocumentView,

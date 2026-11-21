@@ -89,6 +89,9 @@ pub struct PurchaseLineInput {
     /// Partial ITC: the tax amount (rupees) that is claimable.
     #[serde(default)]
     pub itc_eligible: Option<String>,
+    /// Common credit (rule 42): used for both taxable and exempt supplies.
+    #[serde(default)]
+    pub itc_common: Option<bool>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -203,6 +206,9 @@ pub struct ItcReviewInput {
     pub reason: Option<String>,
     #[serde(default)]
     pub eligible: Option<String>,
+    /// Common credit (rule 42); only kept for eligible or partial ITC.
+    #[serde(default)]
+    pub common: Option<bool>,
 }
 
 // ---------------------------------------------------------------------------
@@ -818,6 +824,7 @@ impl<S: Store> AppCore<S> {
                         itc_eligible_paise: 0,
                         itc_reviewed_at: None,
                         itc_reviewed_by: None,
+                        itc_common: l.itc_common.unwrap_or(false),
                     });
                 }
             }
@@ -867,6 +874,7 @@ impl<S: Store> AppCore<S> {
             rec.itc_status = dec.status.into();
             rec.itc_reason = dec.reason;
             rec.itc_eligible_paise = dec.eligible_paise;
+            rec.itc_common &= matches!(dec.status, "eligible" | "partial");
             if dec.status != "na" && dec.status != "pending" {
                 rec.itc_reviewed_at = Some(now.clone());
             }
@@ -1446,6 +1454,8 @@ impl<S: Store> AppCore<S> {
         after.itc_status = dec.status.into();
         after.itc_reason = dec.reason;
         after.itc_eligible_paise = dec.eligible_paise;
+        after.itc_common =
+            input.common.unwrap_or(false) && matches!(dec.status, "eligible" | "partial");
         after.itc_reviewed_at = Some(now.clone());
         after.itc_reviewed_by = Some(ctx.actor.user_id.clone());
         let today = self.today().format("%Y-%m-%d").to_string();

@@ -760,6 +760,15 @@ pub async fn gstr1(
 }
 
 #[tauri::command]
+pub async fn gstr3b(
+    core: State<'_, AppCore>,
+    registration_id: String,
+    period: String,
+) -> CmdResult<av_application::gstr3b::Gstr3bView> {
+    Ok(core.gstr3b(&ctx(), &registration_id, &period).await?)
+}
+
+#[tauri::command]
 pub async fn books_control(core: State<'_, AppCore>) -> CmdResult<BooksControlView> {
     Ok(core.books_control(&ctx()).await?)
 }

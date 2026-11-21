@@ -42,6 +42,8 @@ interface LineDraft {
   itcStatus: Exclude<ItcStatus, "na">;
   itcReason: string;
   itcEligible: string;
+  /** Kept from the saved line; set in the ITC review. */
+  itcCommon?: boolean;
 }
 
 interface Draft {
@@ -96,6 +98,7 @@ function fromView(v: PurchaseDocumentView, asDebitNote = false): Draft {
       itcStatus: l.itcStatus === "na" ? "pending" : l.itcStatus,
       itcReason: l.itcReason ?? "",
       itcEligible: paiseToInput(l.itcEligiblePaise),
+      itcCommon: l.itcCommon,
     })),
   };
 }
@@ -133,6 +136,7 @@ function toInput(d: Draft): PurchaseDocumentInput {
         itcStatus: l.itcStatus,
         itcReason: l.itcReason || undefined,
         itcEligible: l.itcEligible || undefined,
+        itcCommon: l.itcCommon || undefined,
       };
     }),
   };

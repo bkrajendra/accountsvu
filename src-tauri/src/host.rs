@@ -386,6 +386,26 @@ pub async fn save_gstr1_json(
     Ok(Some(saved(&path, file.json.len())))
 }
 
+/// Asks where to save, then writes the GSTR-3B Excel workpaper. `None`
+/// when cancelled.
+#[tauri::command]
+pub async fn save_gstr3b_xlsx(
+    app: AppHandle,
+    core: State<'_, AppCore>,
+    files: State<'_, SavedFiles>,
+    registration_id: String,
+    period: String,
+) -> CmdResult<Option<SavedFile>> {
+    let file = core.gstr3b_xlsx(&ctx(), &registration_id, &period).await?;
+    let Some(path) = save_dialog(&app, file.file_name.clone(), ("Excel workbook", "xlsx")).await
+    else {
+        return Ok(None);
+    };
+    write_file(&path, &file.bytes)?;
+    files.remember(&path);
+    Ok(Some(saved(&path, file.bytes.len())))
+}
+
 /// Opens a file this session saved (never an arbitrary path).
 #[tauri::command]
 pub async fn open_saved_file(

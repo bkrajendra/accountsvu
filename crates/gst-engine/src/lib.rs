@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 
 pub mod checks;
 pub mod invoice;
+pub mod offset;
 pub mod rules;
 
 pub use rules::RulePack;

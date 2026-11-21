@@ -334,6 +334,8 @@ pub struct PurchaseLineRecord {
     pub itc_eligible_paise: i64,
     pub itc_reviewed_at: Option<String>,
     pub itc_reviewed_by: Option<String>,
+    /// Used for both taxable and exempt supplies (rule 42), Phase 2.3.
+    pub itc_common: bool,
 }
 
 #[derive(Clone, Debug, FromRow, Serialize)]

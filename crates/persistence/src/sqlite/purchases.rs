@@ -14,7 +14,7 @@ const DOC_COLS: &str = "id, organisation_id, doc_type, status, gst_registration_
 const LINE_COLS: &str = "id, document_id, line_no, item_id, account_id, description, hsn_sac, unit, quantity, \
     unit_price_paise, discount_paise, tax_category, gst_rate_bp, cess_rate_bp, amount_paise, taxable_paise, \
     cgst_paise, sgst_paise, utgst_paise, igst_paise, cess_paise, total_paise, itc_status, itc_reason, \
-    itc_eligible_paise, itc_reviewed_at, itc_reviewed_by";
+    itc_eligible_paise, itc_reviewed_at, itc_reviewed_by, itc_common";
 
 const ATT_COLS: &str = "id, organisation_id, entity_type, entity_id, file_name, content_type, size_bytes, sha256, uploaded_at, uploaded_by";
 
@@ -157,9 +157,9 @@ impl PurchaseRepo for SqliteUow {
                 "INSERT INTO purchase_line (id, document_id, line_no, item_id, account_id, description, hsn_sac, unit,
                     quantity, unit_price_paise, discount_paise, tax_category, gst_rate_bp, cess_rate_bp, amount_paise,
                     taxable_paise, cgst_paise, sgst_paise, utgst_paise, igst_paise, cess_paise, total_paise, itc_status,
-                    itc_reason, itc_eligible_paise, itc_reviewed_at, itc_reviewed_by)
+                    itc_reason, itc_eligible_paise, itc_reviewed_at, itc_reviewed_by, itc_common)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20,
-                    ?21, ?22, ?23, ?24, ?25, ?26, ?27)",
+                    ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28)",
             )
             .bind(&l.id)
             .bind(document_id)
@@ -188,6 +188,7 @@ impl PurchaseRepo for SqliteUow {
             .bind(l.itc_eligible_paise)
             .bind(&l.itc_reviewed_at)
             .bind(&l.itc_reviewed_by)
+            .bind(l.itc_common)
             .execute(self.c())
             .await?;
         }
@@ -197,7 +198,7 @@ impl PurchaseRepo for SqliteUow {
     async fn update_line_itc(&mut self, l: &PurchaseLineRecord) -> DbResult<()> {
         sqlx::query(
             "UPDATE purchase_line SET itc_status = ?2, itc_reason = ?3, itc_eligible_paise = ?4, itc_reviewed_at = ?5,
-                itc_reviewed_by = ?6
+                itc_reviewed_by = ?6, itc_common = ?7
              WHERE id = ?1",
         )
         .bind(&l.id)
@@ -206,6 +207,7 @@ impl PurchaseRepo for SqliteUow {
         .bind(l.itc_eligible_paise)
         .bind(&l.itc_reviewed_at)
         .bind(&l.itc_reviewed_by)
+        .bind(l.itc_common)
         .execute(self.c())
         .await?;
         Ok(())

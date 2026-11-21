@@ -75,7 +75,7 @@ export function ReturnCentre() {
         title="GST returns"
         subtitle={
           <>
-            GSTR-1 by month for <span className="num font-medium text-fg">{reg.gstin}</span> · {reg.stateName}
+            GSTR-1 and GSTR-3B by month for <span className="num font-medium text-fg">{reg.gstin}</span> · {reg.stateName}
           </>
         }
         actions={
@@ -116,16 +116,18 @@ export function ReturnCentre() {
           </span>
           <div className="min-w-0 flex-1 text-[13.5px]">
             <div className="font-medium">
-              GSTR-1 for {next.label} is due {shortDate(next.gstr1Due)}
+              {next.kind === "gstr1" ? "GSTR-1" : "GSTR-3B"} for {next.p.label} is due {shortDate(next.due)}
             </div>
             <div className="text-muted">
-              {next.documentCount} documents · output tax {formatPaise(next.outputTax.taxPaise)}
-              {next.errorCount > 0 && ` · ${next.errorCount} to fix`}
+              {next.kind === "gstr1"
+                ? `${next.p.documentCount} documents · output tax ${formatPaise(next.p.outputTax.taxPaise)}`
+                : `cash to pay ${formatPaise(next.p.cashPayablePaise)} after ${formatPaise(next.p.netItcPaise)} net ITC`}
+              {next.p.errorCount > 0 && ` · ${next.p.errorCount} to fix`}
             </div>
           </div>
-          <PeriodLink period={next} reg={reg.id}>
-            <Button variant="primary">Open GSTR-1</Button>
-          </PeriodLink>
+          <Link to={`/gst/${next.kind}/${next.p.period}?reg=${reg.id}`}>
+            <Button variant="primary">Open {next.kind === "gstr1" ? "GSTR-1" : "GSTR-3B"}</Button>
+          </Link>
         </Card>
       )}
 
@@ -135,11 +137,12 @@ export function ReturnCentre() {
             <tr className="border-b border-line bg-surface-2 text-left text-[12px] text-muted">
               <th className="px-4 py-2 font-medium">Period</th>
               <th className="px-3 py-2 font-medium">GSTR-1</th>
+              <th className="px-3 py-2 font-medium">GSTR-3B</th>
               <th className="px-3 py-2 text-right font-medium">Documents</th>
-              <th className="px-3 py-2 text-right font-medium">Taxable value</th>
               <th className="px-3 py-2 text-right font-medium">Output tax</th>
+              <th className="px-3 py-2 text-right font-medium">Net ITC</th>
+              <th className="px-3 py-2 text-right font-medium">Cash to pay</th>
               <th className="px-3 py-2 font-medium">Checks</th>
-              <th className="w-8" />
             </tr>
           </thead>
           <tbody className="divide-y divide-line">
@@ -148,7 +151,7 @@ export function ReturnCentre() {
             ))}
             {data.periods.length === 0 && (
               <tr>
-                <td colSpan={7} className="px-4 py-10 text-center text-muted">
+                <td colSpan={8} className="px-4 py-10 text-center text-muted">
                   No return periods in {data.financialYear} yet.
                 </td>
               </tr>
@@ -156,41 +159,50 @@ export function ReturnCentre() {
           </tbody>
         </table>
         <p className="border-t border-line px-4 py-2 text-[12px] text-muted">
-          Output tax is invoices less credit notes, before input tax credit. Due dates are for monthly GSTR-1 (11th of the next month); marking a
-          return as filed comes with offline filing.
+          Output tax is invoices less credit notes. Cash to pay is the GSTR-3B proposal after input tax credit, including reverse charge. Due dates
+          are for monthly returns (GSTR-1 on the 11th, GSTR-3B on the 20th of the next month); marking a return as filed comes with offline filing.
         </p>
       </Card>
     </div>
   );
 }
 
-function nextDue(periods: ReturnPeriod[]): ReturnPeriod | undefined {
-  const today = todayIso();
-  return periods.filter((p) => p.status === "due" && p.gstr1Due >= today).sort((a, b) => a.gstr1Due.localeCompare(b.gstr1Due))[0];
-}
+type Due = { kind: "gstr1" | "gstr3b"; p: ReturnPeriod; due: string };
 
-function PeriodLink({ period, reg, children }: { period: ReturnPeriod; reg: string; children: React.ReactNode }) {
-  return <Link to={`/gst/gstr1/${period.period}?reg=${reg}`}>{children}</Link>;
+function nextDue(periods: ReturnPeriod[]): Due | undefined {
+  const today = todayIso();
+  const all: Due[] = periods.flatMap((p) => [
+    ...(p.status === "due" && p.gstr1Due >= today ? [{ kind: "gstr1" as const, p, due: p.gstr1Due }] : []),
+    ...(p.gstr3bStatus === "due" && p.gstr3bDue >= today ? [{ kind: "gstr3b" as const, p, due: p.gstr3bDue }] : []),
+  ]);
+  return all.sort((a, b) => a.due.localeCompare(b.due))[0];
 }
 
 function PeriodRow({ p, reg }: { p: ReturnPeriod; reg: string }) {
   const navigate = useNavigate();
-  const go = () => navigate(`/gst/gstr1/${p.period}?reg=${reg}`);
+  const go = (kind: "gstr1" | "gstr3b") => navigate(`/gst/${kind}/${p.period}?reg=${reg}`);
+  const cell = (kind: "gstr1" | "gstr3b", status: PeriodStatus, due: string) => (
+    <td className="px-3 py-2.5">
+      <Link to={`/gst/${kind}/${p.period}?reg=${reg}`} onClick={(e) => e.stopPropagation()} className="group inline-flex items-center gap-1">
+        {statusBadge(status, due)}
+        <ChevronRight size={14} className="text-subtle group-hover:text-fg" />
+      </Link>
+    </td>
+  );
   return (
-    <tr tabIndex={0} onClick={go} onKeyDown={(e) => e.key === "Enter" && go()} className="cursor-pointer hover:bg-hover">
+    <tr onClick={() => go("gstr1")} className="cursor-pointer hover:bg-hover">
       <td className="px-4 py-2.5 font-medium">{p.label}</td>
-      <td className="px-3 py-2.5">{statusBadge(p.status, p.gstr1Due)}</td>
+      {cell("gstr1", p.status, p.gstr1Due)}
+      {cell("gstr3b", p.gstr3bStatus, p.gstr3bDue)}
       <td className="num px-3 py-2.5 text-right">
         {p.documentCount}
         {p.draftCount > 0 && <span className="text-[12px] text-muted"> +{p.draftCount} draft</span>}
       </td>
-      <td className="num px-3 py-2.5 text-right">{formatPaise(p.outputTax.taxablePaise)}</td>
-      <td className="num px-3 py-2.5 text-right font-medium">{formatPaise(p.outputTax.taxPaise)}</td>
+      <td className="num px-3 py-2.5 text-right">{formatPaise(p.outputTax.taxPaise)}</td>
+      <td className="num px-3 py-2.5 text-right">{formatPaise(p.netItcPaise)}</td>
+      <td className="num px-3 py-2.5 text-right font-medium">{formatPaise(p.cashPayablePaise)}</td>
       <td className="px-3 py-2.5">
         <Checks errors={p.errorCount} warnings={p.warningCount} />
-      </td>
-      <td className="pr-3 text-subtle">
-        <ChevronRight size={16} />
       </td>
     </tr>
   );
