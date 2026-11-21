@@ -14,6 +14,7 @@ pub mod masters;
 mod posting;
 pub mod purchases;
 pub mod reports;
+pub mod returns;
 pub mod sales;
 pub mod security;
 pub mod setup;

@@ -54,7 +54,7 @@ export function Badge({ tone = "neutral", icon, children }: { tone?: Tone; icon?
   return (
     <span
       className={clsx(
-        "inline-flex h-[22px] items-center gap-1 rounded-full px-2 text-[11.5px] font-semibold",
+        "inline-flex h-[22px] items-center gap-1 whitespace-nowrap rounded-full px-2 text-[11.5px] font-semibold",
         tone === "neutral" && "bg-active text-muted",
         tone === "accent" && "bg-accent-soft text-accent",
         tone === "success" && "bg-success-soft text-success",

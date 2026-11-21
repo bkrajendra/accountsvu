@@ -11,6 +11,7 @@ av-accounting.workspace = true
 av-gst-engine.workspace = true
 av-persistence.workspace = true
 av-document-render.workspace = true
+av-gst-formats.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 tracing.workspace = true

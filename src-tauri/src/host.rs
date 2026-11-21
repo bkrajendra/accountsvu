@@ -364,6 +364,28 @@ pub async fn open_sales_pdf(app: AppHandle, core: State<'_, AppCore>, id: String
         .map_err(io_err)
 }
 
+/// Asks where to save, then writes the GSTR-1 portal JSON. `None` when
+/// cancelled. The export is audit-logged only once a file is written.
+#[tauri::command]
+pub async fn save_gstr1_json(
+    app: AppHandle,
+    core: State<'_, AppCore>,
+    files: State<'_, SavedFiles>,
+    registration_id: String,
+    period: String,
+) -> CmdResult<Option<SavedFile>> {
+    let view = core.gstr1(&ctx(), &registration_id, &period).await?;
+    let (year, month) = view.period.split_once('-').unwrap_or_default();
+    let name = format!("GSTR1_{}_{month}{year}.json", view.gstin);
+    let Some(path) = save_dialog(&app, name, ("GSTR-1 JSON", "json")).await else {
+        return Ok(None);
+    };
+    let file = core.gstr1_json(&ctx(), &registration_id, &period).await?;
+    write_file(&path, file.json.as_bytes())?;
+    files.remember(&path);
+    Ok(Some(saved(&path, file.json.len())))
+}
+
 /// Opens a file this session saved (never an arbitrary path).
 #[tauri::command]
 pub async fn open_saved_file(

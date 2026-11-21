@@ -246,7 +246,7 @@ pub(crate) fn parse_quantity(e: &mut Errors, field: &str, s: &str) -> Option<Dec
     }
 }
 
-fn kind_of(rec: &SalesDocumentRecord) -> SupplyKind {
+pub(crate) fn kind_of(rec: &SalesDocumentRecord) -> SupplyKind {
     match rec.supply_kind.as_str() {
         "intra_state" => SupplyKind::IntraState,
         "intra_union_territory" => SupplyKind::IntraUnionTerritory,
@@ -254,7 +254,7 @@ fn kind_of(rec: &SalesDocumentRecord) -> SupplyKind {
     }
 }
 
-fn recipient_of(d: &SalesDocumentRecord) -> Recipient {
+pub(crate) fn recipient_of(d: &SalesDocumentRecord) -> Recipient {
     if d.place_of_supply == OTHER_COUNTRY {
         return Recipient::Overseas;
     }
@@ -266,7 +266,7 @@ fn recipient_of(d: &SalesDocumentRecord) -> Recipient {
     }
 }
 
-fn ymd(s: &str) -> NaiveDate {
+pub(crate) fn ymd(s: &str) -> NaiveDate {
     NaiveDate::parse_from_str(s, "%Y-%m-%d").unwrap_or_default()
 }
 

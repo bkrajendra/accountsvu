@@ -5,6 +5,10 @@
  * live in crates/application and are the only ones that matter.
  */
 import type {
+  Gstr1,
+  ReturnCentre,
+  ReturnPeriod,
+  TaxTotals as ReturnTotals,
   Gstr1Info,
   Gstr1Section,
   TaxWarning,
@@ -86,7 +90,7 @@ import type {
   SetupBusinessInput,
   UpdateRegistrationInput,
 } from "./api";
-import { gstinError, gstinParts, STATES } from "./gst";
+import { gstinError, gstinParts, stateName, STATES } from "./gst";
 
 type Fail = { code: string; message: string; fields: { field: string; message: string }[] };
 
@@ -609,6 +613,271 @@ function previewGstr1(d: { docType: string; partyGstType: string; placeOfSupply:
   return { section, label: section ? GSTR1_LABELS[section] : null, nilTable: !overseas && (other || (d.docType === "bill_of_supply" && taxable)) };
 }
 
+// ---------------------------------------------------------------------------
+// GST returns (preview; the Rust workpaper is the real one)
+// ---------------------------------------------------------------------------
+
+const zeroTotals = (): ReturnTotals => ({ taxablePaise: 0, igstPaise: 0, cgstPaise: 0, sgstPaise: 0, cessPaise: 0, taxPaise: 0 });
+
+type TotalsLike = { taxablePaise: number; igstPaise: number; cgstPaise: number; sgstPaise: number; utgstPaise?: number; cessPaise: number };
+
+function addTotals(t: ReturnTotals, l: TotalsLike, sign = 1) {
+  t.taxablePaise += sign * l.taxablePaise;
+  t.igstPaise += sign * l.igstPaise;
+  t.cgstPaise += sign * l.cgstPaise;
+  t.sgstPaise += sign * (l.sgstPaise + (l.utgstPaise ?? 0));
+  t.cessPaise += sign * l.cessPaise;
+  t.taxPaise = t.igstPaise + t.cgstPaise + t.sgstPaise + t.cessPaise;
+}
+
+function isoLocal(d: Date) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+function monthEnd(period: string) {
+  const [y, m] = period.split("-").map(Number);
+  return isoLocal(new Date(y, m, 0));
+}
+
+function gstr1Due(period: string) {
+  const [y, m] = period.split("-").map(Number);
+  return isoLocal(new Date(y, m, 11));
+}
+
+function periodStatus(period: string): ReturnPeriod["status"] {
+  const today = isoLocal(new Date());
+  return today <= monthEnd(period) ? "open" : today <= gstr1Due(period) ? "due" : "past_due";
+}
+
+function periodLabel(period: string) {
+  const [y, m] = period.split("-").map(Number);
+  return new Date(y, m - 1, 1).toLocaleDateString("en-IN", { month: "long", year: "numeric" });
+}
+
+const NIL_LABELS: Record<string, string> = {
+  inter_registered: "Inter-state to registered persons",
+  intra_registered: "Intra-state to registered persons",
+  inter_unregistered: "Inter-state to unregistered persons",
+  intra_unregistered: "Intra-state to unregistered persons",
+};
+
+function previewWorkpaper(regId: string, period: string): Gstr1 {
+  const reg = regs.find((r) => r.id === regId);
+  if (!reg) throw { code: "not_found", message: "That GST registration wasn't found.", fields: [] } satisfies Fail;
+  const from = `${period}-01`;
+  const to = monthEnd(period);
+  const docs = salesDocs
+    .filter((d) => (d.gstRegistrationId ?? regs[0]?.id) === reg.id && d.docDate >= from && d.docDate <= to)
+    .sort((a, b) => (a.docDate + (a.number ?? "")).localeCompare(b.docDate + (b.number ?? "")));
+  const exceptions: Gstr1["exceptions"] = [];
+  const documents: Gstr1["documents"] = [];
+  const b2cs = new Map<string, Gstr1["b2cs"][number]>();
+  const nil = new Map<string, Gstr1["nil"][number]>();
+  const hsn = new Map<string, Gstr1["hsn"][number]>();
+  const series = new Map<string, { label: string; numbers: string[]; cancelled: number }>();
+  const place = (d: SalesDocument) => (d.placeOfSupply === 96 ? "Outside India" : stateName(d.placeOfSupply));
+  const word = (d: SalesDocument) => (d.docType === "credit_note" ? "Credit note" : d.docType === "bill_of_supply" ? "Bill of supply" : "Invoice");
+  for (const d of docs) {
+    if (d.status === "draft") {
+      exceptions.push({ severity: "warning", code: "draft", message: `Draft for ${d.partyName} dated ${d.docDate} isn't issued, so it isn't in this return.`, documentId: d.id, number: null });
+      continue;
+    }
+    const nature = d.docType === "credit_note" ? "Credit notes" : "Invoices for outward supply";
+    const sKey = nature + (d.seriesId ?? "");
+    const s = series.get(sKey) ?? { label: nature, numbers: [], cancelled: 0 };
+    s.numbers.push(d.number ?? "");
+    series.set(sKey, s);
+    if (d.status === "cancelled") {
+      s.cancelled += 1;
+      continue;
+    }
+    const credit = d.docType === "credit_note";
+    const sign = credit ? -1 : 1;
+    const original = salesDocs.find((o) => o.id === d.originalDocumentId);
+    const taxable = d.lines.some((l) => l.taxCategory === "taxable");
+    const other = d.lines.some((l) => l.taxCategory !== "taxable");
+    let section = previewGstr1(d, taxable, other).section;
+    if (credit && section === "cdnur" && original && previewGstr1(original, true, false).section === "b2cs") section = "b2cs";
+    const registered = ["regular", "composition", "sez"].includes(d.partyGstType);
+    const inter = d.supplyKind === "inter_state";
+    for (const [i, l] of d.lines.entries()) {
+      if (!l.hsnSac) {
+        exceptions.push({ severity: "error", code: "missing_hsn", message: `Line ${i + 1} of ${word(d)} ${d.number} has no HSN/SAC code; table 12 needs one.`, documentId: d.id, number: d.number });
+      }
+      if (l.taxCategory !== "taxable" && d.placeOfSupply !== 96) {
+        const key = `${inter ? "inter" : "intra"}_${registered ? "registered" : "unregistered"}`;
+        const n = nil.get(key) ?? { supply: key, label: NIL_LABELS[key], nilPaise: 0, exemptPaise: 0, nonGstPaise: 0 };
+        if (l.taxCategory === "nil_rated") n.nilPaise += sign * l.taxablePaise;
+        else if (l.taxCategory === "non_gst") n.nonGstPaise += sign * l.taxablePaise;
+        else n.exemptPaise += sign * l.taxablePaise;
+        nil.set(key, n);
+      }
+      if (l.hsnSac) {
+        const code = l.hsnSac;
+        const service = code.startsWith("99");
+        const uqc = service ? "NA" : l.unit && /^[A-Z]{3}$/.test(l.unit) ? l.unit : "OTH";
+        const rate = l.taxCategory === "taxable" ? l.gstRateBp : 0;
+        const group: "b2b" | "b2c" = registered ? "b2b" : "b2c";
+        const key = [group, code, uqc, rate].join("|");
+        const rule = PREVIEW_HSN.filter((h) => code.startsWith(h.code)).sort((a, b) => b.code.length - a.code.length)[0];
+        const h = hsn.get(key) ?? { group, hsn: code, description: rule?.description ?? l.description, uqc, quantity: "0", rateBp: rate, totals: zeroTotals() };
+        if (!service) h.quantity = String(Number(h.quantity) + sign * Number(l.quantity));
+        addTotals(h.totals, l, sign);
+        hsn.set(key, h);
+      }
+    }
+    if (!section) continue;
+    const lines = d.lines.filter((l) => l.taxCategory === "taxable" || d.placeOfSupply === 96);
+    if (section === "b2cs") {
+      for (const l of lines) {
+        const key = `${d.placeOfSupply}|${l.gstRateBp}|${!inter}`;
+        const row = b2cs.get(key) ?? { placeOfSupply: d.placeOfSupply, placeName: place(d), intraState: !inter, rateBp: l.gstRateBp, totals: zeroTotals(), documents: [] };
+        addTotals(row.totals, l, sign);
+        if (!row.documents.some((x) => x.id === d.id)) row.documents.push({ id: d.id, number: d.number ?? "", docType: d.docType });
+        b2cs.set(key, row);
+      }
+      continue;
+    }
+    const totals = zeroTotals();
+    for (const l of lines) addTotals(totals, l);
+    const key: Gstr1["documents"][number]["section"] = section.startsWith("exp") ? "exp" : section.startsWith("sez") ? "b2b" : (section as "b2b" | "b2cl" | "cdnr" | "cdnur");
+    const labels: Record<string, string> = { expWpay: "Export with payment", expWopay: "Export under LUT", sezWpay: "SEZ with payment", sezWopay: "SEZ under LUT", b2cl: "B2C large" };
+    documents.push({
+      id: d.id,
+      section: key,
+      docType: d.docType,
+      number: d.number ?? "",
+      docDate: d.docDate,
+      partyName: d.partyName,
+      gstin: registered ? d.partyGstin : null,
+      placeOfSupply: d.placeOfSupply,
+      placeName: place(d),
+      kindLabel: labels[section] ?? "Regular",
+      reverseCharge: d.reverseCharge,
+      valuePaise: d.totalPaise,
+      totals,
+      originalNumber: original?.number ?? null,
+      originalId: original?.id ?? null,
+    });
+  }
+  if (documents.some((r) => r.section === "exp")) {
+    exceptions.push({ severity: "warning", code: "shipping_bill", message: "Exports of goods need the shipping bill number, date and port code. AccountsVU doesn't record them yet; add them on the portal before filing.", documentId: null, number: null });
+  }
+  for (const h of hsn.values()) {
+    if (h.uqc === "OTH") exceptions.push({ severity: "warning", code: "uqc", message: `HSN ${h.hsn} at ${h.rateBp / 100}% (${h.group}) has lines without a standard unit, so it is reported in OTH (others).`, documentId: null, number: null });
+  }
+  const sum = (key: string) => {
+    const t = zeroTotals();
+    let value = 0;
+    const rows = documents.filter((r) => r.section === key);
+    for (const r of rows) {
+      addTotals(t, r.totals);
+      value += r.valuePaise;
+    }
+    return { count: rows.length, totals: t, valuePaise: value };
+  };
+  const net = zeroTotals();
+  const sections: Gstr1["sections"] = [];
+  const main = [
+    ["b2b", "B2B, SEZ and deemed exports", "4A, 4B, 6B, 6C"],
+    ["b2cl", "B2C large", "5"],
+    ["exp", "Exports", "6A"],
+  ] as const;
+  for (const [key, title, table] of main) {
+    const x = sum(key);
+    addTotals(net, x.totals);
+    sections.push({ key, title, table, ...x });
+  }
+  const b2csTotals = zeroTotals();
+  for (const r of b2cs.values()) addTotals(b2csTotals, r.totals);
+  addTotals(net, b2csTotals);
+  sections.push({ key: "b2cs", title: "B2C small", table: "7", count: [...b2cs.values()].reduce((a, r) => a + r.documents.length, 0), totals: b2csTotals, valuePaise: 0 });
+  const nilRows = [...nil.values()];
+  sections.push({ key: "nil", title: "Nil-rated, exempt and non-GST", table: "8", count: nilRows.length, totals: zeroTotals(), valuePaise: nilRows.reduce((a, n) => a + n.nilPaise + n.exemptPaise + n.nonGstPaise, 0) });
+  const notes = [
+    ["cdnr", "Credit notes, registered"],
+    ["cdnur", "Credit notes, unregistered"],
+  ] as const;
+  for (const [key, title] of notes) {
+    const x = sum(key);
+    addTotals(net, x.totals, -1);
+    sections.push({ key, title, table: "9B", ...x });
+  }
+  const hsnTotals = zeroTotals();
+  for (const h of hsn.values()) addTotals(hsnTotals, h.totals);
+  sections.push({ key: "hsn", title: "HSN summary", table: "12", count: hsn.size, totals: hsnTotals, valuePaise: 0 });
+  const seriesRows = [...series.values()].map((s) => {
+    const sorted = [...s.numbers].sort();
+    return { label: s.label, from: sorted[0], to: sorted[sorted.length - 1], total: s.numbers.length, cancelled: s.cancelled, net: s.numbers.length - s.cancelled };
+  });
+  sections.push({ key: "docs", title: "Documents issued", table: "13", count: seriesRows.reduce((a, s) => a + s.total, 0), totals: zeroTotals(), valuePaise: 0 });
+  exceptions.sort((a, b) => (a.severity === "error" ? 0 : 1) - (b.severity === "error" ? 0 : 1));
+  return {
+    registrationId: reg.id,
+    gstin: reg.gstin,
+    stateName: stateName(reg.stateCode),
+    period,
+    label: periodLabel(period),
+    from,
+    to,
+    dueDate: gstr1Due(period),
+    status: periodStatus(period),
+    rulePackVersion: PREVIEW_PACK,
+    formatVersion: "gstr1-json/1",
+    sections,
+    totals: net,
+    documents,
+    b2cs: [...b2cs.values()],
+    nil: nilRows,
+    hsn: [...hsn.values()],
+    series: seriesRows,
+    exceptions,
+  };
+}
+
+function previewReturnCentre(regId: string | null, fyCode: string | null): ReturnCentre {
+  const active = regs.filter((r) => r.registrationType !== "composition");
+  const reg = active.find((r) => r.id === regId) ?? active.find((r) => r.status === "active") ?? active[0] ?? null;
+  const currentStart = Number(fy().code.slice(0, 4));
+  const start = fyCode ? Number(fyCode.slice(0, 4)) : currentStart;
+  const code = (y: number) => `${y}-${String((y + 1) % 100).padStart(2, "0")}`;
+  const today = isoLocal(new Date());
+  const periods: ReturnPeriod[] = [];
+  if (reg) {
+    for (let i = 0; i < 12; i++) {
+      const d = new Date(start, 3 + i, 1);
+      const p = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+      if (`${p}-01` > today) break;
+      const w = previewWorkpaper(reg.id, p);
+      const inPeriod = salesDocs.filter((x) => (x.gstRegistrationId ?? regs[0]?.id) === reg.id && x.docDate >= w.from && x.docDate <= w.to);
+      periods.push({
+        period: p,
+        label: w.label,
+        from: w.from,
+        to: w.to,
+        gstr1Due: w.dueDate,
+        status: w.status,
+        documentCount: inPeriod.filter((x) => x.status === "issued").length,
+        draftCount: inPeriod.filter((x) => x.status === "draft").length,
+        errorCount: w.exceptions.filter((e) => e.severity === "error").length,
+        warningCount: w.exceptions.filter((e) => e.severity !== "error").length,
+        outputTax: w.totals,
+      });
+    }
+  }
+  return {
+    registrations: active.map((r) => ({ id: r.id, gstin: r.gstin, stateName: stateName(r.stateCode), filingFrequency: r.filingFrequency as "monthly" | "quarterly" })),
+    registrationId: reg?.id ?? null,
+    financialYear: code(start),
+    fyStart: `${start}-04-01`,
+    fyEnd: `${start + 1}-03-31`,
+    previousYear: start >= currentStart ? code(start - 1) : null,
+    nextYear: `${start + 1}-04-01` <= today ? code(start + 1) : null,
+    quarterly: reg?.filingFrequency === "quarterly",
+    periods: periods.reverse(),
+  };
+}
+
 function calculate(input: SalesDocumentInput): SalesCalculation {
   const s = supplyFor(input);
   const taxFree = input.docType === "bill_of_supply" || input.zeroRated;
@@ -701,7 +970,7 @@ function writeSales(id: string | null, input: SalesDocumentInput): SalesDocument
     rulePackVersion: PREVIEW_PACK,
     lines: input.lines.map((l, i) => ({
       id: crypto.randomUUID(), documentId: docId, lineNo: i + 1, itemId: l.itemId ?? null,
-      description: l.description || item(l.itemId)?.name || "", hsnSac: l.hsnSac ?? item(l.itemId)?.hsnSac ?? null, unit: l.unit ?? null,
+      description: l.description || item(l.itemId)?.name || "", hsnSac: l.hsnSac ?? item(l.itemId)?.hsnSac ?? null, unit: l.unit ?? item(l.itemId)?.unit ?? null,
       quantity: l.quantity, unitPricePaise: toPaise(l.unitPrice) ?? 0, discountPaise: toPaise(l.discount) ?? 0, taxCategory: l.taxCategory,
       gstRateBp: toBp(l.gstRate), cessRateBp: 0, ...c.lines[i]!,
     })),
@@ -1693,6 +1962,12 @@ function reportCommand(command: string, args: Record<string, any>): unknown {
       const buckets = [0, 1, 2, 3, 4].map((i) => list.reduce((a, p) => a + p.buckets[i], 0));
       return { kind, asOf, bucketLabels: ["Not due", "1–30 days", "31–60 days", "61–90 days", "Over 90 days"], parties: list, buckets, unallocatedPaise: 0, totalPaise: list.reduce((a, p) => a + p.totalPaise, 0) } satisfies Ageing;
     }
+    case "return_centre":
+      return previewReturnCentre(args.registrationId ?? null, args.financialYear ?? null);
+    case "gstr1":
+      return previewWorkpaper(args.registrationId, args.period);
+    case "save_gstr1_json":
+      throw { code: "invalid_input", message: "Saving the GSTR-1 file runs in the desktop app.", fields: [] } satisfies Fail;
     case "books_control":
       return control();
     case "set_books_lock": {
@@ -1891,7 +2166,7 @@ function hostCommand(command: string, args: Record<string, any>): unknown {
       throw { code: "invalid_input", message: "The browser preview can't restart. Restoring runs in the desktop app.", fields: [] } satisfies Fail;
     case "check_update":
       return {
-        currentVersion: "0.2.1",
+        currentVersion: "0.2.2",
         version: "0.3.0",
         date: new Date(Date.now() - 86_400_000).toISOString(),
         notes: "AccountsVU 0.3.0 — sample release notes from the browser preview.",
@@ -1915,7 +2190,7 @@ export async function previewBackend(command: string, args: Record<string, any> 
   if (hosted !== undefined) return hosted;
   switch (command) {
     case "app_health":
-      return { appVersion: "0.2.1", schemaVersion: 9, database: "(browser preview — in memory)", organisationConfigured: !!org };
+      return { appVersion: "0.2.2", schemaVersion: 9, database: "(browser preview — in memory)", organisationConfigured: !!org };
     case "dashboard_summary":
       return {
         salesThisMonth: "0", purchasesThisMonth: "0",

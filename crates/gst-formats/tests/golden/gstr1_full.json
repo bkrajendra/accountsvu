@@ -1,0 +1,278 @@
+{
+  "gstin": "27AAPFU0939F1ZV",
+  "fp": "102026",
+  "version": "GST3.2.2",
+  "hash": "hash",
+  "b2b": [
+    {
+      "ctin": "29AABCU9603R1ZJ",
+      "inv": [
+        {
+          "inum": "INV/26-27/0001",
+          "idt": "03-10-2026",
+          "val": 118000.00,
+          "pos": "29",
+          "rchrg": "N",
+          "inv_typ": "R",
+          "itms": [
+            {
+              "num": 1,
+              "itm_det": {
+                "txval": 100000.00,
+                "rt": 18,
+                "iamt": 18000.00,
+                "csamt": 0.00
+              }
+            }
+          ]
+        },
+        {
+          "inum": "INV/26-27/0004",
+          "idt": "20-10-2026",
+          "val": 5000.00,
+          "pos": "29",
+          "rchrg": "N",
+          "inv_typ": "SEWOP",
+          "itms": [
+            {
+              "num": 1,
+              "itm_det": {
+                "txval": 5000.00,
+                "rt": 18,
+                "iamt": 0.00,
+                "csamt": 0.00
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "ctin": "27AABCT3518Q1ZW",
+      "inv": [
+        {
+          "inum": "INV/26-27/0002",
+          "idt": "09-10-2026",
+          "val": 15900.00,
+          "pos": "27",
+          "rchrg": "N",
+          "inv_typ": "R",
+          "itms": [
+            {
+              "num": 1,
+              "itm_det": {
+                "txval": 10000.00,
+                "rt": 5,
+                "camt": 250.00,
+                "samt": 250.00,
+                "csamt": 0.00
+              }
+            },
+            {
+              "num": 2,
+              "itm_det": {
+                "txval": 3000.00,
+                "rt": 18,
+                "camt": 270.00,
+                "samt": 270.00,
+                "csamt": 0.00
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "b2cl": [
+    {
+      "pos": "24",
+      "inv": [
+        {
+          "inum": "INV/26-27/0003",
+          "idt": "12-10-2026",
+          "val": 177000.00,
+          "itms": [
+            {
+              "num": 1,
+              "itm_det": {
+                "txval": 150000.00,
+                "rt": 18,
+                "iamt": 27000.00,
+                "csamt": 0.00
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "b2cs": [
+    {
+      "sply_ty": "INTRA",
+      "rt": 5,
+      "typ": "OE",
+      "pos": "27",
+      "txval": 2000.50,
+      "camt": 50.01,
+      "samt": 50.01,
+      "csamt": 0.00
+    },
+    {
+      "sply_ty": "INTER",
+      "rt": 18,
+      "typ": "OE",
+      "pos": "07",
+      "txval": 1000.00,
+      "iamt": 180.00,
+      "csamt": 0.00
+    }
+  ],
+  "exp": [
+    {
+      "exp_typ": "WOPAY",
+      "inv": [
+        {
+          "inum": "EXP/26-27/0001",
+          "idt": "15-10-2026",
+          "val": 50000.00,
+          "itms": [
+            {
+              "txval": 50000.00,
+              "rt": 18,
+              "iamt": 0.00,
+              "csamt": 0.00
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "cdnr": [
+    {
+      "ctin": "29AABCU9603R1ZJ",
+      "nt": [
+        {
+          "ntty": "C",
+          "nt_num": "CN/26-27/0001",
+          "nt_dt": "25-10-2026",
+          "val": 11800.00,
+          "pos": "29",
+          "rchrg": "N",
+          "inv_typ": "R",
+          "itms": [
+            {
+              "num": 1,
+              "itm_det": {
+                "txval": 10000.00,
+                "rt": 18,
+                "iamt": 1800.00,
+                "csamt": 0.00
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "cdnur": [
+    {
+      "typ": "B2CL",
+      "ntty": "C",
+      "nt_num": "CN/26-27/0002",
+      "nt_dt": "28-10-2026",
+      "val": 11800.00,
+      "pos": "24",
+      "itms": [
+        {
+          "num": 1,
+          "itm_det": {
+            "txval": 10000.00,
+            "rt": 18,
+            "iamt": 1800.00,
+            "csamt": 0.00
+          }
+        }
+      ]
+    }
+  ],
+  "nil": {
+    "inv": [
+      {
+        "sply_ty": "INTRB2B",
+        "nil_amt": 1200.00,
+        "expt_amt": 0.00,
+        "ngsup_amt": 0.00
+      },
+      {
+        "sply_ty": "INTRAB2C",
+        "nil_amt": 0.00,
+        "expt_amt": 450.00,
+        "ngsup_amt": 0.00
+      }
+    ]
+  },
+  "hsn": {
+    "hsn_b2b": [
+      {
+        "num": 1,
+        "hsn_sc": "8415",
+        "desc": "Air conditioners",
+        "uqc": "NOS",
+        "qty": 4,
+        "rt": 18,
+        "txval": 90000.00,
+        "iamt": 16200.00,
+        "camt": 0.00,
+        "samt": 0.00,
+        "csamt": 0.00
+      }
+    ],
+    "hsn_b2c": [
+      {
+        "num": 1,
+        "hsn_sc": "998314",
+        "desc": "IT design and development",
+        "uqc": "NA",
+        "qty": 0,
+        "rt": 18,
+        "txval": 1000.00,
+        "iamt": 180.00,
+        "camt": 0.00,
+        "samt": 0.00,
+        "csamt": 0.00
+      }
+    ]
+  },
+  "doc_issue": {
+    "doc_det": [
+      {
+        "doc_num": 1,
+        "doc_typ": "Invoices for outward supply",
+        "docs": [
+          {
+            "num": 1,
+            "from": "INV/26-27/0001",
+            "to": "INV/26-27/0005",
+            "totnum": 5,
+            "cancel": 1,
+            "net_issue": 4
+          }
+        ]
+      },
+      {
+        "doc_num": 5,
+        "doc_typ": "Credit Note",
+        "docs": [
+          {
+            "num": 1,
+            "from": "CN/26-27/0001",
+            "to": "CN/26-27/0002",
+            "totnum": 2,
+            "cancel": 0,
+            "net_issue": 2
+          }
+        ]
+      }
+    ]
+  }
+}

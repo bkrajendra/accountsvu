@@ -736,6 +736,30 @@ pub async fn ageing(
 }
 
 #[tauri::command]
+pub async fn return_centre(
+    core: State<'_, AppCore>,
+    registration_id: Option<String>,
+    financial_year: Option<String>,
+) -> CmdResult<av_application::returns::ReturnCentreView> {
+    Ok(core
+        .return_centre(
+            &ctx(),
+            registration_id.as_deref(),
+            financial_year.as_deref(),
+        )
+        .await?)
+}
+
+#[tauri::command]
+pub async fn gstr1(
+    core: State<'_, AppCore>,
+    registration_id: String,
+    period: String,
+) -> CmdResult<av_application::returns::Gstr1View> {
+    Ok(core.gstr1(&ctx(), &registration_id, &period).await?)
+}
+
+#[tauri::command]
 pub async fn books_control(core: State<'_, AppCore>) -> CmdResult<BooksControlView> {
     Ok(core.books_control(&ctx()).await?)
 }

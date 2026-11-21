@@ -64,7 +64,6 @@ export const primaryNav: NavItem[] = [
     label: "GST Filing",
     icon: FileCheck2,
     summary: "Prepare, reconcile and validate GSTR-1 and GSTR-3B, then record filing with ARN evidence.",
-    phase: "Phase 2–3",
   },
 ];
 

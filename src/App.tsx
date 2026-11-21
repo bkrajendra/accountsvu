@@ -23,6 +23,8 @@ import { Reports } from "./pages/reports/Reports";
 import { BalanceSheetPage, ProfitAndLossPage, TrialBalancePage } from "./pages/reports/Statements";
 import { AgeingPage, GeneralLedgerPage, JournalPage, PartyLedgerPage } from "./pages/reports/Ledgers";
 import { Setup } from "./pages/Setup";
+import { ReturnCentre } from "./pages/gst/ReturnCentre";
+import { Gstr1Page } from "./pages/gst/Gstr1Page";
 import { ToastProvider } from "./components/Toast";
 import { SessionGate } from "./lib/session";
 import { UpdateHost, UpdaterProvider } from "./lib/updater";
@@ -67,8 +69,10 @@ const router = createHashRouter([
       { path: "reports/party/:id", element: <PartyLedgerPage /> },
       { path: "reports/journal", element: <JournalPage /> },
       { path: "reports/ageing/:kind", element: <AgeingPage /> },
+      { path: "gst", element: <ReturnCentre /> },
+      { path: "gst/gstr1/:period", element: <Gstr1Page /> },
       ...primaryNav
-        .filter((n) => !["/", "/sales", "/purchases", "/parties", "/items", "/banking", "/reports"].includes(n.path))
+        .filter((n) => !["/", "/sales", "/purchases", "/parties", "/items", "/banking", "/reports", "/gst"].includes(n.path))
         .map((n) => ({ path: n.path.slice(1), element: <Placeholder item={n} /> })),
       { path: "settings", element: <Settings /> },
     ],

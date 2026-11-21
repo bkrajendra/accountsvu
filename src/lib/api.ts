@@ -1296,6 +1296,157 @@ export type UpdateProgress =
   | { event: "progress"; downloaded: number }
   | { event: "finished" };
 
+// ---------------------------------------------------------------------------
+// GST returns (Phase 2.2)
+// ---------------------------------------------------------------------------
+
+export interface TaxTotals {
+  taxablePaise: number;
+  igstPaise: number;
+  cgstPaise: number;
+  /** SGST and UTGST. */
+  sgstPaise: number;
+  cessPaise: number;
+  taxPaise: number;
+}
+
+export interface ReturnRegistration {
+  id: string;
+  gstin: string;
+  stateName: string;
+  filingFrequency: "monthly" | "quarterly";
+}
+
+export type PeriodStatus = "open" | "due" | "past_due";
+
+export interface ReturnPeriod {
+  /** YYYY-MM */
+  period: string;
+  label: string;
+  from: string;
+  to: string;
+  gstr1Due: string;
+  status: PeriodStatus;
+  documentCount: number;
+  draftCount: number;
+  errorCount: number;
+  warningCount: number;
+  outputTax: TaxTotals;
+}
+
+export interface ReturnCentre {
+  registrations: ReturnRegistration[];
+  registrationId: string | null;
+  financialYear: string;
+  fyStart: string;
+  fyEnd: string;
+  previousYear: string | null;
+  nextYear: string | null;
+  quarterly: boolean;
+  periods: ReturnPeriod[];
+}
+
+export type ReturnSectionKey = "b2b" | "b2cl" | "exp" | "b2cs" | "nil" | "cdnr" | "cdnur" | "hsn" | "docs";
+
+export interface ReturnSection {
+  key: ReturnSectionKey;
+  title: string;
+  table: string;
+  count: number;
+  totals: TaxTotals;
+  valuePaise: number;
+}
+
+export interface ReturnDocRow {
+  id: string;
+  section: "b2b" | "b2cl" | "exp" | "cdnr" | "cdnur";
+  docType: string;
+  number: string;
+  docDate: string;
+  partyName: string;
+  gstin: string | null;
+  placeOfSupply: number;
+  placeName: string;
+  kindLabel: string;
+  reverseCharge: boolean;
+  valuePaise: number;
+  totals: TaxTotals;
+  originalNumber: string | null;
+  originalId: string | null;
+}
+
+export interface ReturnDocLink {
+  id: string;
+  number: string;
+  docType: string;
+}
+
+export interface B2csRow {
+  placeOfSupply: number;
+  placeName: string;
+  intraState: boolean;
+  rateBp: number;
+  totals: TaxTotals;
+  documents: ReturnDocLink[];
+}
+
+export interface NilRow {
+  supply: string;
+  label: string;
+  nilPaise: number;
+  exemptPaise: number;
+  nonGstPaise: number;
+}
+
+export interface HsnRow {
+  group: "b2b" | "b2c";
+  hsn: string;
+  description: string;
+  uqc: string;
+  quantity: string;
+  rateBp: number;
+  totals: TaxTotals;
+}
+
+export interface DocSeriesRow {
+  label: string;
+  from: string;
+  to: string;
+  total: number;
+  cancelled: number;
+  net: number;
+}
+
+export interface ReturnException {
+  severity: "error" | "warning";
+  code: string;
+  message: string;
+  documentId: string | null;
+  number: string | null;
+}
+
+export interface Gstr1 {
+  registrationId: string;
+  gstin: string;
+  stateName: string;
+  period: string;
+  label: string;
+  from: string;
+  to: string;
+  dueDate: string;
+  status: PeriodStatus;
+  rulePackVersion: string;
+  formatVersion: string;
+  sections: ReturnSection[];
+  totals: TaxTotals;
+  documents: ReturnDocRow[];
+  b2cs: B2csRow[];
+  nil: NilRow[];
+  hsn: HsnRow[];
+  series: DocSeriesRow[];
+  exceptions: ReturnException[];
+}
+
 /** Fired when the host reports the app is locked. */
 export const LOCKED_EVENT = "accountsvu:locked";
 
@@ -1428,6 +1579,11 @@ export const api = {
     call<Ledger>("party_ledger", { partyId, from: from || null, to: to || null }),
   journalRegister: (from?: string, to?: string) => call<JournalRegister>("journal_register", { from: from || null, to: to || null }),
   ageing: (kind: "receivables" | "payables", asOf: string) => call<Ageing>("ageing", { kind, asOf }),
+  returnCentre: (registrationId?: string | null, financialYear?: string | null) =>
+    call<ReturnCentre>("return_centre", { registrationId: registrationId || null, financialYear: financialYear || null }),
+  gstr1: (registrationId: string, period: string) => call<Gstr1>("gstr1", { registrationId, period }),
+  /** Asks where to save the portal JSON; null when cancelled (desktop only). */
+  saveGstr1Json: (registrationId: string, period: string) => call<SavedFile | null>("save_gstr1_json", { registrationId, period }),
   booksControl: () => call<BooksControl>("books_control"),
   setBooksLock: (until: string | null, reason?: string) => call<BooksControl>("set_books_lock", { until, reason: reason || null }),
   closeFinancialYear: (code: string) => call<BooksControl>("close_financial_year", { code }),

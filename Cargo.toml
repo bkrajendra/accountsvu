@@ -3,7 +3,7 @@ resolver = "3"
 members = ["src-tauri", "crates/*"]
 
 [workspace.package]
-version = "0.2.1"
+version = "0.2.2"
 edition = "2024"
 authors = ["Rajendra Khope"]
 license = "UNLICENSED"
@@ -17,6 +17,7 @@ av-gst-engine = { path = "crates/gst-engine" }
 av-persistence = { path = "crates/persistence" }
 av-application = { path = "crates/application" }
 av-document-render = { path = "crates/document-render" }
+av-gst-formats = { path = "crates/gst-formats" }
 
 # external
 serde = { version = "1", features = ["derive"] }

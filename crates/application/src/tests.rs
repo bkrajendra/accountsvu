@@ -3603,3 +3603,219 @@ async fn rule_pack_checks_and_gstr1_placement() {
         vec!["place_of_supply"]
     );
 }
+
+#[tokio::test]
+async fn gstr1_workpaper_return_centre_and_json() {
+    use crate::returns::TaxTotals;
+
+    let s = shop().await;
+    let issue = |input: SalesDocumentInput| {
+        let core = &s.core;
+        async move {
+            core.issue_sales_document(&ctx(), None, input, None)
+                .await
+                .unwrap()
+        }
+    };
+    // B2C small, intra-state, and a credit note against it (nets in table 7).
+    let small = issue(invoice(
+        &s.customer,
+        "2026-11-02",
+        vec![line(Some(&s.laptop), "2", "1000", "18")],
+    ))
+    .await;
+    issue(SalesDocumentInput {
+        doc_type: "credit_note".into(),
+        doc_date: "2026-11-05".into(),
+        original_document_id: Some(small.document.id.clone()),
+        reason: Some("One returned".into()),
+        lines: vec![line(Some(&s.laptop), "1", "1000", "18")],
+        ..Default::default()
+    })
+    .await;
+    // B2C large, inter-state.
+    issue(invoice(
+        &s.karnataka,
+        "2026-11-03",
+        vec![line(Some(&s.laptop), "1", "150000", "18")],
+    ))
+    .await;
+    // B2B to a Karnataka GSTIN, plus an exempt line (table 8).
+    let ka = "29AAPFU0939F1Z".to_owned();
+    let ka = format!("{ka}{}", check_char(&ka));
+    let acme = s
+        .core
+        .create_party(
+            &ctx(),
+            PartyInput {
+                gst_type: "regular".into(),
+                gstin: Some(ka.clone()),
+                ..customer("Acme Retail")
+            },
+        )
+        .await
+        .unwrap()
+        .party
+        .id;
+    let mut exempt = line(None, "1", "500", "0");
+    exempt.tax_category = "exempt".into();
+    exempt.gst_rate = None;
+    issue(invoice(
+        &acme,
+        "2026-11-04",
+        vec![line(Some(&s.laptop), "1", "10000", "18"), exempt],
+    ))
+    .await;
+    // Cancelled invoice: only counted in table 13.
+    let gone = issue(invoice(
+        &s.customer,
+        "2026-11-06",
+        vec![line(Some(&s.laptop), "1", "10", "18")],
+    ))
+    .await;
+    s.core
+        .cancel_sales_document(
+            &ctx(),
+            &gone.document.id,
+            "Duplicate",
+            gone.document.row_version,
+        )
+        .await
+        .unwrap();
+    // A draft in the period is an exception; one in October is not.
+    s.core
+        .save_sales_draft(
+            &ctx(),
+            None,
+            invoice(
+                &s.customer,
+                "2026-11-07",
+                vec![line(Some(&s.laptop), "1", "5", "18")],
+            ),
+            None,
+        )
+        .await
+        .unwrap();
+
+    let centre = s.core.return_centre(&ctx(), None, None).await.unwrap();
+    assert_eq!(centre.financial_year, "2026-27");
+    let reg = centre.registration_id.clone().unwrap();
+    assert_eq!(
+        centre.periods.first().unwrap().period,
+        "2026-11",
+        "newest first"
+    );
+    assert_eq!(centre.periods.len(), 8, "April to November");
+    let nov = &centre.periods[0];
+    assert_eq!((nov.status, nov.gstr1_due.as_str()), ("open", "2026-12-11"));
+    assert_eq!((nov.document_count, nov.draft_count), (4, 1), "issued only");
+    assert_eq!(
+        centre.periods[1].status, "past_due",
+        "October was due on 11 November"
+    );
+
+    let g = s.core.gstr1(&ctx(), &reg, "2026-11").await.unwrap();
+    let section = |k: &str| g.sections.iter().find(|x| x.key == k).unwrap();
+    assert_eq!(section("b2b").count, 1);
+    assert_eq!(section("b2cl").count, 1);
+    assert_eq!(section("cdnr").count + section("cdnur").count, 0);
+    assert_eq!(section("b2cs").count, 2, "invoice and its credit note");
+    // Table 7 nets the credit note: one laptop left at ₹1,000.
+    assert_eq!(g.b2cs.len(), 1);
+    assert_eq!(
+        (
+            g.b2cs[0].totals.taxable_paise,
+            g.b2cs[0].totals.cgst_paise,
+            g.b2cs[0].intra_state
+        ),
+        (100_000, 9_000, true)
+    );
+    assert_eq!(g.nil.len(), 1);
+    assert_eq!(
+        (g.nil[0].supply, g.nil[0].exempt_paise),
+        ("inter_registered", 50_000)
+    );
+    let expected = TaxTotals {
+        taxable_paise: 100_000 + 15_000_000 + 1_000_000,
+        igst_paise: 2_700_000 + 180_000,
+        cgst_paise: 9_000,
+        sgst_paise: 9_000,
+        cess_paise: 0,
+        tax_paise: 2_700_000 + 180_000 + 18_000,
+    };
+    assert_eq!(g.totals, expected);
+    // HSN summary agrees with the tables; the Installation line's SAC is a service.
+    assert!(
+        g.exceptions.iter().all(|e| e.code != "hsn_mismatch"),
+        "{:?}",
+        g.exceptions
+    );
+    let hsn_tax: i64 = g.hsn.iter().map(|h| h.totals.tax_paise).sum();
+    assert_eq!(hsn_tax, expected.tax_paise);
+    assert!(g.hsn.iter().any(|h| h.group == "b2b" && h.hsn == "8471"));
+    // B2C: one B2CL laptop plus two B2CS laptops less the one returned.
+    let b2c = g
+        .hsn
+        .iter()
+        .find(|h| h.group == "b2c" && h.hsn == "8471")
+        .unwrap();
+    assert_eq!(
+        (b2c.quantity.as_str(), b2c.totals.taxable_paise),
+        ("2", 15_100_000)
+    );
+    assert!(g.hsn.iter().any(|h| h.hsn == "998713" && h.uqc == "NA"));
+    // Table 13: four invoices issued (one cancelled), one credit note.
+    let inv = g
+        .series
+        .iter()
+        .find(|x| x.label.starts_with("Invoices"))
+        .unwrap();
+    assert_eq!(
+        (
+            inv.from.as_str(),
+            inv.to.as_str(),
+            inv.total,
+            inv.cancelled,
+            inv.net
+        ),
+        ("INV/26-27/0001", "INV/26-27/0004", 4, 1, 3)
+    );
+    assert!(
+        g.series
+            .iter()
+            .any(|x| x.label == "Credit notes" && x.total == 1)
+    );
+    assert!(g.exceptions.iter().any(|e| e.code == "draft"));
+    assert_eq!(
+        g.exceptions
+            .iter()
+            .filter(|e| e.severity == "error")
+            .count(),
+        0
+    );
+    // Drill-down: every row keeps its document id.
+    let b2b = g.documents.iter().find(|r| r.section == "b2b").unwrap();
+    assert_eq!(b2b.gstin.as_deref(), Some(ka.as_str()));
+    assert_eq!(b2b.totals.igst_paise, 180_000);
+
+    // Portal JSON, recorded in the audit log.
+    let file = s.core.gstr1_json(&ctx(), &reg, "2026-11").await.unwrap();
+    assert!(
+        file.file_name.ends_with("_112026.json"),
+        "{}",
+        file.file_name
+    );
+    let v: serde_json::Value = serde_json::from_str(&file.json).unwrap();
+    assert_eq!(v["fp"], "112026");
+    assert_eq!(v["b2b"][0]["ctin"], ka.as_str());
+    assert_eq!(v["b2cs"][0]["sply_ty"], "INTRA");
+    assert!(file.json.contains("\"txval\": 1000.00"));
+    assert_eq!(v["doc_issue"]["doc_det"][0]["docs"][0]["cancel"], 1);
+    let log = s.core.list_audit_events(&ctx(), 20).await.unwrap();
+    assert!(log.iter().any(|e| e.action == "gstr1.exported"));
+
+    // An empty month still has a valid, header-only file.
+    let oct = s.core.gstr1(&ctx(), &reg, "2026-10").await.unwrap();
+    assert!(oct.documents.is_empty() && oct.exceptions.is_empty());
+    assert!(s.core.gstr1(&ctx(), &reg, "2026-13").await.is_err());
+}
