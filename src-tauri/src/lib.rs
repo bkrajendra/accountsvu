@@ -105,6 +105,7 @@ pub fn run() {
         host::save_sales_pdf,
         host::save_gstr1_json,
         host::save_gstr3b_xlsx,
+        host::save_import_template,
         host::open_sales_pdf,
         host::open_saved_file,
         host::backup_status,

@@ -63,10 +63,10 @@ export function Overview() {
         subtitle={new Date().toLocaleDateString("en-IN", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}
         actions={
           <>
-            <Button>
+            <Button onClick={() => navigate("/purchases/new")}>
               <ShoppingBag size={15} /> Record bill
             </Button>
-            <Button variant="primary">
+            <Button variant="primary" onClick={() => navigate("/sales/new")}>
               <Receipt size={15} /> New invoice
             </Button>
           </>

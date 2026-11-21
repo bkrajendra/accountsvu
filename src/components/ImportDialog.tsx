@@ -2,7 +2,7 @@ import { useRef, useState, type DragEvent } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
 import { AlertTriangle, CheckCircle2, Download, FileSpreadsheet, Loader2, Upload } from "lucide-react";
-import { api, ApiError, keys, type ImportKind, type ImportMapping, type ImportPreview, type ImportResult, type ParsedImport } from "../lib/api";
+import { api, ApiError, keys, runningInTauri, type ImportKind, type ImportMapping, type ImportPreview, type ImportResult, type ParsedImport } from "../lib/api";
 import { Badge, Button } from "./ui";
 import { Dialog } from "./Dialog";
 import { Select } from "./form";
@@ -70,12 +70,18 @@ export function ImportDialog({ kind, onClose }: { kind: ImportKind; onClose: () 
   }
 
   async function downloadTemplate() {
+    if (runningInTauri) {
+      const f = await run(() => api.saveImportTemplate(kind));
+      if (f) toast(`Saved ${f.fileName}`, "success", { label: "Open", onClick: () => void api.openSavedFile(f.path) });
+      return;
+    }
     const t = await run(() => api.importTemplate(kind));
     if (!t) return;
     const url = URL.createObjectURL(new Blob(["﻿", t.csv], { type: "text/csv;charset=utf-8" }));
     const a = Object.assign(document.createElement("a"), { href: url, download: t.fileName });
     a.click();
     URL.revokeObjectURL(url);
+    toast(`Downloaded ${t.fileName} to your browser's downloads`, "success");
   }
 
   async function review() {

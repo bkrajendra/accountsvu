@@ -2357,7 +2357,7 @@ function hostCommand(command: string, args: Record<string, any>): unknown {
       throw { code: "invalid_input", message: "The browser preview can't restart. Restoring runs in the desktop app.", fields: [] } satisfies Fail;
     case "check_update":
       return {
-        currentVersion: "0.2.3",
+        currentVersion: "0.2.4",
         version: "0.3.0",
         date: new Date(Date.now() - 86_400_000).toISOString(),
         notes: "AccountsVU 0.3.0 — sample release notes from the browser preview.",
@@ -2381,7 +2381,7 @@ export async function previewBackend(command: string, args: Record<string, any> 
   if (hosted !== undefined) return hosted;
   switch (command) {
     case "app_health":
-      return { appVersion: "0.2.3", schemaVersion: 10, database: "(browser preview — in memory)", organisationConfigured: !!org };
+      return { appVersion: "0.2.4", schemaVersion: 10, database: "(browser preview — in memory)", organisationConfigured: !!org };
     case "dashboard_summary":
       return {
         salesThisMonth: "0", purchasesThisMonth: "0",

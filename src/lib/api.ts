@@ -1681,6 +1681,7 @@ export const api = {
   gstr3b: (registrationId: string, period: string) => call<Gstr3b>("gstr3b", { registrationId, period }),
   /** Asks where to save the Excel workpaper; null when cancelled (desktop only). */
   saveGstr3bXlsx: (registrationId: string, period: string) => call<SavedFile | null>("save_gstr3b_xlsx", { registrationId, period }),
+  saveImportTemplate: (kind: ImportKind) => call<SavedFile | null>("save_import_template", { kind }),
   booksControl: () => call<BooksControl>("books_control"),
   setBooksLock: (until: string | null, reason?: string) => call<BooksControl>("set_books_lock", { until, reason: reason || null }),
   closeFinancialYear: (code: string) => call<BooksControl>("close_financial_year", { code }),

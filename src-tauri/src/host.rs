@@ -406,6 +406,24 @@ pub async fn save_gstr3b_xlsx(
     Ok(Some(saved(&path, file.bytes.len())))
 }
 
+/// Asks where to save, then writes the import template (CSV with a BOM so
+/// Excel reads it as UTF-8). `None` when cancelled.
+#[tauri::command]
+pub async fn save_import_template(
+    app: AppHandle,
+    files: State<'_, SavedFiles>,
+    kind: av_application::ImportKind,
+) -> CmdResult<Option<SavedFile>> {
+    let t = av_application::import_template(kind);
+    let Some(path) = save_dialog(&app, t.file_name.clone(), ("CSV file", "csv")).await else {
+        return Ok(None);
+    };
+    let bytes = [&[0xEF_u8, 0xBB, 0xBF][..], t.csv.as_bytes()].concat();
+    write_file(&path, &bytes)?;
+    files.remember(&path);
+    Ok(Some(saved(&path, bytes.len())))
+}
+
 /// Opens a file this session saved (never an arbitrary path).
 #[tauri::command]
 pub async fn open_saved_file(
