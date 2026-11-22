@@ -13,7 +13,7 @@ export function SettingsSection({
   children: ReactNode;
 }) {
   return (
-    <section className="mb-8 grid gap-4 lg:grid-cols-[220px_1fr] lg:gap-8">
+    <section className="mb-8 grid gap-4 @3xl:grid-cols-[220px_1fr] @3xl:gap-8">
       <div>
         <h2 className="text-title">{title}</h2>
         {description && <p className="mt-1 text-[13px] text-muted">{description}</p>}
