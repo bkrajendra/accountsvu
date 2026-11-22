@@ -30,6 +30,7 @@
     "active": true,
     "targets": "all",
     "category": "Business",
+    "license": "AGPL-3.0-only",
     "shortDescription": "Small business accounting and GST",
     "macOS": {
       "signingIdentity": "-",

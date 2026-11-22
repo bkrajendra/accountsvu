@@ -2,6 +2,7 @@
 name = "av-persistence"
 description = "SQLx repositories and embedded migrations (SQLite)"
 version.workspace = true
+license.workspace = true
 edition.workspace = true
 publish.workspace = true
 

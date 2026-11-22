@@ -2,6 +2,7 @@
 name = "av-accounting"
 description = "Double-entry journals, posting rules and period locks"
 version.workspace = true
+license.workspace = true
 edition.workspace = true
 publish.workspace = true
 
