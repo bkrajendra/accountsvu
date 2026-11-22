@@ -12,6 +12,7 @@ pub mod checks;
 pub mod invoice;
 pub mod offset;
 pub mod recon;
+pub mod returns;
 pub mod rules;
 
 pub use rules::RulePack;

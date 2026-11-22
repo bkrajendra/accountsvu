@@ -803,6 +803,45 @@ pub async fn decide_gstr2b(
 }
 
 #[tauri::command]
+pub async fn return_filing(
+    core: State<'_, AppCore>,
+    registration_id: String,
+    period: String,
+    return_type: String,
+) -> CmdResult<av_application::filing::FilingView> {
+    Ok(core
+        .return_filing(&ctx(), &registration_id, &period, &return_type)
+        .await?)
+}
+
+/// The acknowledgement's bytes arrive as a JSON array; capped at 5 MB in core.
+#[tauri::command]
+pub async fn record_filing(
+    core: State<'_, AppCore>,
+    registration_id: String,
+    period: String,
+    return_type: String,
+    input: av_application::filing::FilingInput,
+) -> CmdResult<av_application::filing::FilingView> {
+    Ok(core
+        .record_filing(&ctx(), &registration_id, &period, &return_type, input)
+        .await?)
+}
+
+#[tauri::command]
+pub async fn remove_filing(
+    core: State<'_, AppCore>,
+    registration_id: String,
+    period: String,
+    return_type: String,
+    reason: String,
+) -> CmdResult<av_application::filing::FilingView> {
+    Ok(core
+        .remove_filing(&ctx(), &registration_id, &period, &return_type, &reason)
+        .await?)
+}
+
+#[tauri::command]
 pub async fn books_control(core: State<'_, AppCore>) -> CmdResult<BooksControlView> {
     Ok(core.books_control(&ctx()).await?)
 }

@@ -11,6 +11,7 @@ import { useToast } from "../../components/Toast";
 import { Amount, Loading } from "../reports/common";
 import { statusBadge, useReturnScope } from "./ReturnCentre";
 import { Exceptions, ReturnSwitch } from "./Gstr1Page";
+import { FilingPanel, monthLabel, useFiling } from "./FilingPanel";
 
 const sum = (h: Heads) => h.igst + h.cgst + h.sgst + h.cess;
 
@@ -28,6 +29,7 @@ export function Gstr3bPage() {
     queryFn: () => api.gstr3b(reg!, period),
     enabled: !!reg,
   });
+  const { data: filing } = useFiling(reg, period, "gstr3b");
 
   if (error) return <Card className="px-4 py-10 text-center text-[13px] text-danger">{error instanceof Error ? error.message : String(error)}</Card>;
   if (!data) return <Loading />;
@@ -43,11 +45,13 @@ export function Gstr3bPage() {
           <ReturnSwitch current="gstr3b" period={data.period} reg={data.registrationId} />
           <h1 className="text-display">{data.label}</h1>
           <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[14px] text-muted">
-            <span className="num text-fg">{data.gstin}</span> · {data.stateName} · {statusBadge(data.status, data.dueDate)}
+            <span className="num text-fg">{data.gstin}</span> · {data.stateName} · {statusBadge(data.status, data.dueDate, filing?.filing)}
           </p>
         </div>
         <ExportButton data={data} />
       </div>
+
+      <FilingPanel reg={data.registrationId} period={data.period} returnType="gstr3b" />
 
       {data.exceptions.length > 0 && <Exceptions list={data.exceptions} />}
 
@@ -437,6 +441,7 @@ function ItcLines({ data }: { data: Gstr3b }) {
                     </Badge>
                     {l.common && <Badge tone="accent">Common</Badge>}
                     {l.reverseCharge && <Badge>RCM</Badge>}
+                    {l.movedFrom && <Badge tone="accent">From {monthLabel(l.movedFrom)}</Badge>}
                   </span>
                 </td>
                 <td className="px-3 py-2 text-right"><Amount paise={sum(l.tax)} /></td>

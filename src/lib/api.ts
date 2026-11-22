@@ -648,6 +648,8 @@ export interface PurchaseLine {
   itcReviewedBy: string | null;
   /** Common credit under rule 42 (used for taxable and exempt supplies). */
   itcCommon: boolean;
+  /** YYYY-MM the ITC is claimed in when reviewed after that month's GSTR-3B was filed. */
+  itcPeriod: string | null;
 }
 
 export interface PurchaseSummary extends PurchaseDocument {
@@ -1346,6 +1348,13 @@ export interface ReturnPeriod {
   gstr2bImported: boolean;
   /** Reconciliation rows still needing a decision (0 until imported). */
   gstr2bNeedsReview: number;
+  gstr1Filed: FiledBadge | null;
+  gstr3bFiled: FiledBadge | null;
+}
+
+export interface FiledBadge {
+  arn: string;
+  filedOn: string;
 }
 
 export interface ReturnCentre {
@@ -1507,6 +1516,71 @@ export interface Gstr3bItcLine {
   reverseCharge: boolean;
   tax: Heads;
   eligible: Heads;
+  /** Document month, when the ITC was reviewed after its GSTR-3B was filed. */
+  movedFrom: string | null;
+}
+
+// Offline filing (Phase 2.5)
+
+export type FilingReturnType = "gstr1" | "gstr3b";
+
+export interface ReturnValidation {
+  packVersion: string;
+  errors: ReturnException[];
+  warnings: ReturnException[];
+  canFile: boolean;
+}
+
+export interface FilingFile {
+  id: string;
+  kind: "portal_json" | "workpaper_json" | "workpaper_xlsx" | "acknowledgement";
+  fileName: string;
+  sizeBytes: number;
+}
+
+export interface FilingRecord {
+  id: string;
+  channel: string;
+  arn: string;
+  filedOn: string;
+  note: string | null;
+  returnPackVersion: string;
+  rulePackVersion: string;
+  summary: Record<string, unknown>;
+  warningCount: number;
+  recordedAt: string;
+  recordedBy: string;
+  files: FilingFile[];
+}
+
+export interface RemovedFiling {
+  arn: string;
+  filedOn: string;
+  removedAt: string | null;
+  removedBy: string | null;
+  reason: string | null;
+}
+
+export interface FilingView {
+  registrationId: string;
+  gstin: string;
+  returnType: FilingReturnType;
+  label: string;
+  period: string;
+  periodLabel: string;
+  dueDate: string;
+  filing: FilingRecord | null;
+  removed: RemovedFiling[];
+  validation: ReturnValidation;
+  summary: Record<string, unknown>;
+  changedSinceFiling: boolean;
+}
+
+export interface FilingInput {
+  arn: string;
+  filedOn: string;
+  note: string | null;
+  acknowledgement: { fileName: string; bytes: number[] } | null;
 }
 
 // GSTR-2B reconciliation (Phase 2.4)
@@ -1798,6 +1872,18 @@ export const api = {
   /** Asks where to save the Excel workpaper; null when cancelled (desktop only). */
   saveGstr3bXlsx: (registrationId: string, period: string) => call<SavedFile | null>("save_gstr3b_xlsx", { registrationId, period }),
   saveImportTemplate: (kind: ImportKind) => call<SavedFile | null>("save_import_template", { kind }),
+  returnFiling: (registrationId: string, period: string, returnType: FilingReturnType) =>
+    call<FilingView>("return_filing", { registrationId, period, returnType }),
+  recordFiling: (registrationId: string, period: string, returnType: FilingReturnType, input: FilingInput) =>
+    call<FilingView>("record_filing", { registrationId, period, returnType, input }),
+  removeFiling: (registrationId: string, period: string, returnType: FilingReturnType, reason: string) =>
+    call<FilingView>("remove_filing", { registrationId, period, returnType, reason }),
+  /** Asks where to save the filing pack (zip); null when cancelled (desktop only). */
+  saveFilingPack: (registrationId: string, period: string, returnType: FilingReturnType) =>
+    call<SavedFile | null>("save_filing_pack", { registrationId, period, returnType }),
+  /** Asks where to save the compliance pack (zip); null when cancelled (desktop only). */
+  saveCompliancePack: (registrationId: string, period: string, returnType: FilingReturnType) =>
+    call<SavedFile | null>("save_compliance_pack", { registrationId, period, returnType }),
   booksControl: () => call<BooksControl>("books_control"),
   setBooksLock: (until: string | null, reason?: string) => call<BooksControl>("set_books_lock", { until, reason: reason || null }),
   closeFinancialYear: (code: string) => call<BooksControl>("close_financial_year", { code }),

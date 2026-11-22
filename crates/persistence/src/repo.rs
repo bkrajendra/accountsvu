@@ -23,6 +23,7 @@ use crate::records::{
     AccountTotalsRecord, AgeingDocRecord, BackupLogRecord, BooksLockRecord, FyCloseRecord,
     JournalRowRecord, LogoRecord,
 };
+use crate::records::{GstFilingFileRecord, GstFilingRecord};
 use crate::records::{Gstr2bDecisionRecord, Gstr2bLineRecord, Gstr2bStatementRecord};
 
 pub type DbResult<T> = Result<T, DbError>;
@@ -64,6 +65,7 @@ pub trait UnitOfWork:
     + ReportRepo
     + BackupRepo
     + Gstr2bRepo
+    + GstFilingRepo
     + Send
 {
     fn commit(self) -> impl Future<Output = DbResult<()>> + Send;
@@ -719,4 +721,35 @@ pub trait Gstr2bRepo {
         period: &str,
         row_key: &str,
     ) -> impl Future<Output = DbResult<bool>> + Send;
+}
+
+/// Offline filing records (Phase 2.5).
+pub trait GstFilingRepo {
+    /// Every record of a GSTIN (filed and removed), oldest month first.
+    fn list_gst_filings(
+        &mut self,
+        org_id: &str,
+        registration_id: &str,
+    ) -> impl Future<Output = DbResult<Vec<GstFilingRecord>>> + Send;
+    fn insert_gst_filing(
+        &mut self,
+        f: &GstFilingRecord,
+    ) -> impl Future<Output = DbResult<()>> + Send;
+    /// Marks a filed record removed; `false` if it isn't filed (any more).
+    fn remove_gst_filing(
+        &mut self,
+        org_id: &str,
+        id: &str,
+        reason: &str,
+        at: &str,
+        by: &str,
+    ) -> impl Future<Output = DbResult<bool>> + Send;
+    fn insert_gst_filing_file(
+        &mut self,
+        f: &GstFilingFileRecord,
+    ) -> impl Future<Output = DbResult<()>> + Send;
+    fn gst_filing_files(
+        &mut self,
+        filing_id: &str,
+    ) -> impl Future<Output = DbResult<Vec<GstFilingFileRecord>>> + Send;
 }

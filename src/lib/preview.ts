@@ -5,6 +5,10 @@
  * live in crates/application and are the only ones that matter.
  */
 import type {
+  FilingFile,
+  FilingInput,
+  FilingView,
+  FilingReturnType,
   Gstr1,
   Gstr2b,
   Gstr2bDecisionInput,
@@ -939,17 +943,23 @@ function previewGstr3bOne(regId: string, period: string, broughtForward: Heads):
   let pendingLines = 0;
   let common = H0();
   let commonLines = 0;
-  for (const d of purchaseDocs.filter((x) => x.status === "recorded" && ours(x))) {
+  const mine = (d: { gstRegistrationId: string | null }) => (d.gstRegistrationId ?? regs[0]?.id) === regId;
+  for (const d of purchaseDocs.filter((x) => x.status === "recorded" && mine(x) && (ours(x) || x.lines.some((l) => l.itcPeriod === period)))) {
     const sign = d.docType === "debit_note" ? -1 : 1;
+    const inMonth = ours(d);
+    const docMonth = d.docDate.slice(0, 7);
     for (const l of d.lines) {
       const tax = lineHeads(l);
-      if (d.reverseCharge && l.taxCategory === "taxable") add(outward, "d", sign * l.taxablePaise, hPlus(H0(), tax, sign));
-      const col = l.taxCategory === "non_gst" ? 1 : ["nil_rated", "exempt"].includes(l.taxCategory) ? 0 : -1;
-      if (col >= 0) {
-        if (d.supplyKind === "inter_state") inward[col].interStatePaise += sign * l.taxablePaise;
-        else inward[col].intraStatePaise += sign * l.taxablePaise;
+      const claim = l.itcPeriod ?? docMonth;
+      if (inMonth) {
+        if (d.reverseCharge && l.taxCategory === "taxable") add(outward, "d", sign * l.taxablePaise, hPlus(H0(), tax, sign));
+        const col = l.taxCategory === "non_gst" ? 1 : ["nil_rated", "exempt"].includes(l.taxCategory) ? 0 : -1;
+        if (col >= 0) {
+          if (d.supplyKind === "inter_state") inward[col].interStatePaise += sign * l.taxablePaise;
+          else inward[col].intraStatePaise += sign * l.taxablePaise;
+        }
       }
-      if (!hSum(tax) || l.itcStatus === "na" || (!d.partyGstin && !d.reverseCharge)) continue;
+      if (claim !== period || !hSum(tax) || l.itcStatus === "na" || (!d.partyGstin && !d.reverseCharge)) continue;
       const table = d.reverseCharge ? (d.partyGstType === "overseas" ? "2" : "3") : "5";
       const total = hSum(tax);
       const eligible = l.itcStatus === "eligible" ? tax : l.itcStatus === "partial" ? { igst: Math.round((tax.igst * l.itcEligiblePaise) / total), cgst: Math.round((tax.cgst * l.itcEligiblePaise) / total), sgst: Math.round((tax.sgst * l.itcEligiblePaise) / total), cess: 0 } : H0();
@@ -967,7 +977,7 @@ function previewGstr3bOne(regId: string, period: string, broughtForward: Heads):
       itcLines.push({
         documentId: d.id, docType: d.docType, supplierInvoice: d.supplierInvoiceNumber ?? d.number, docDate: d.docDate, partyName: d.partyName ?? "", gstin: d.partyGstin,
         description: l.description, table: l.itcStatus === "pending" ? "pending" : `4A(${table})`, status: l.itcStatus, reason: l.itcReason, common: !!l.itcCommon, reverseCharge: d.reverseCharge,
-        tax: hPlus(H0(), tax, sign), eligible: hPlus(H0(), eligible, sign),
+        tax: hPlus(H0(), tax, sign), eligible: hPlus(H0(), eligible, sign), movedFrom: claim !== docMonth ? docMonth : null,
       });
     }
   }
@@ -999,7 +1009,7 @@ function previewGstr3bOne(regId: string, period: string, broughtForward: Heads):
   const rs = (p: number) => `₹${(p / 100).toLocaleString("en-IN", { minimumFractionDigits: 2 })}`;
   if (pendingLines) exceptions.push({ severity: "warning", code: "itc_pending", message: `${pendingLines} purchase ${pendingLines === 1 ? "line" : "lines"} with ${rs(hSum(pending))} of GST ${pendingLines === 1 ? "is" : "are"} awaiting ITC review, so not claimed. Review them in Purchases to claim.`, documentId: null, number: null });
   if (hSum(reversal) > 0) exceptions.push({ severity: "warning", code: "rule42", message: `Rule 42: ${rs(hSum(reversal))} of common credit is reversed in 4B(1) for exempt supplies (${rs(exempt)} of ${rs(turnover)} turnover). This is the monthly figure; it is trued up for the year.`, documentId: null, number: null });
-  for (const c of crossCheck) if (c.differencePaise) exceptions.push({ severity: c.label.startsWith("Nil") ? "warning" : "error", code: "gstr1_mismatch", message: `${c.label}: GSTR-1 shows ${rs(c.gstr1Paise)}, GSTR-3B ${rs(c.gstr3bPaise)}.`, documentId: null, number: null });
+  for (const c of crossCheck) if (c.differencePaise) exceptions.push({ severity: c.label.startsWith("Nil") ? "warning" : "error", code: c.label.startsWith("Nil") ? "gstr1_nil_mismatch" : "gstr1_mismatch", message: `${c.label}: GSTR-1 shows ${rs(c.gstr1Paise)}, GSTR-3B ${rs(c.gstr3bPaise)}.`, documentId: null, number: null });
   const [y, m] = period.split("-").map(Number);
   const due = isoLocal(new Date(y, m, 20));
   const today = isoLocal(new Date());
@@ -1256,6 +1266,167 @@ function previewDecideGstr2b(regId: string, period: string, input: Gstr2bDecisio
   return previewGstr2b(regId, period);
 }
 
+
+// ---------------------------------------------------------------------------
+// Offline filing (Phase 2.5)
+// ---------------------------------------------------------------------------
+
+type PreviewFiling = {
+  id: string;
+  regId: string;
+  returnType: FilingReturnType;
+  period: string;
+  status: "filed" | "removed";
+  arn: string;
+  filedOn: string;
+  note: string | null;
+  summary: Record<string, unknown>;
+  warningCount: number;
+  recordedAt: string;
+  files: FilingFile[];
+  removedAt: string | null;
+  reason: string | null;
+};
+let filings: PreviewFiling[] = [];
+
+const RETURN_LABEL: Record<FilingReturnType, string> = { gstr1: "GSTR-1", gstr3b: "GSTR-3B" };
+const FILING_ERRORS = new Set(["period_open", "missing_gstin", "missing_hsn", "hsn_mismatch", "gstr1_mismatch"]);
+
+function filedRecord(regId: string, period: string, rt: FilingReturnType) {
+  return filings.find((f) => f.status === "filed" && f.regId === regId && f.period === period && f.returnType === rt);
+}
+
+function filedBadge(regId: string, period: string, rt: FilingReturnType) {
+  const f = filedRecord(regId, period, rt);
+  return f ? { arn: f.arn, filedOn: f.filedOn } : null;
+}
+
+function monthName(period: string) {
+  return new Date(`${period}-01T00:00:00`).toLocaleDateString("en-IN", { month: "long", year: "numeric" });
+}
+
+function prevMonth(period: string) {
+  const d = new Date(`${period}-01T00:00:00`);
+  d.setMonth(d.getMonth() - 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function nextMonth(period: string) {
+  const d = new Date(`${period}-01T00:00:00`);
+  d.setMonth(d.getMonth() + 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+
+/** "GSTR-1 for October 2026" when a filed return locks the family on that date. */
+function previewGstLock(regId: string | null, date: string, family: "sales" | "purchases") {
+  const reg = regId ?? regs[0]?.id;
+  if (!reg) return null;
+  const month = date.slice(0, 7);
+  const f = (["gstr1", "gstr3b"] as const)
+    .filter((rt) => family === "sales" || rt === "gstr3b")
+    .map((rt) => filedRecord(reg, month, rt))
+    .find(Boolean);
+  return f ? `${RETURN_LABEL[f.returnType]} for ${monthName(month)}` : null;
+}
+
+function previewReturnFiling(regId: string, period: string, rt: FilingReturnType): FilingView {
+  const reg = regs.find((r) => r.id === regId) ?? nf("GST registration not found");
+  const checks: Gstr1["exceptions"] = [];
+  let summary: Record<string, unknown>;
+  let label: string;
+  let due: string;
+  if (rt === "gstr1") {
+    const w = previewWorkpaper(regId, period);
+    checks.push(...w.exceptions);
+    summary = { documents: w.documents.length, totals: w.totals };
+    label = w.label;
+    due = w.dueDate;
+  } else {
+    const v = previewGstr3b(regId, period);
+    checks.push(...v.exceptions);
+    summary = { liability: v.liability, reverseCharge: v.reverseCharge, itcNet: v.itcNet, cashPayable: v.offset.cashTotal, carryForward: v.offset.carryForward };
+    label = v.label;
+    due = v.dueDate;
+    if (!filedRecord(regId, period, "gstr1"))
+      checks.push({ severity: "warning", code: "gstr1_unfiled", message: `GSTR-1 for ${monthName(period)} isn't recorded as filed. The portal expects it before GSTR-3B.`, documentId: null, number: null });
+    if (recon2b.has(`${regId}|${period}`)) {
+      const n = previewGstr2b(regId, period).needsReview;
+      if (n) checks.push({ severity: "warning", code: "gstr2b_review", message: `${n} GSTR-2B ${n === 1 ? "row is" : "rows are"} still to review.`, documentId: null, number: null });
+    } else {
+      checks.push({ severity: "warning", code: "gstr2b_missing", message: `GSTR-2B for ${monthName(period)} isn't imported, so ITC isn't checked against it.`, documentId: null, number: null });
+    }
+  }
+  const today = isoLocal(new Date());
+  if (today < `${nextMonth(period)}-01`)
+    checks.push({ severity: "error", code: "period_open", message: `${monthName(period)} isn't over yet; it can be filed from 1 ${monthName(nextMonth(period))}.`, documentId: null, number: null });
+  const prev = prevMonth(period);
+  if (org && prev >= org.booksStartDate.slice(0, 7) && !filedRecord(regId, prev, rt))
+    checks.push({ severity: "warning", code: "previous_unfiled", message: `${RETURN_LABEL[rt]} for ${monthName(prev)} isn't recorded as filed. Returns are filed in order.`, documentId: null, number: null });
+  const blocking = (c: { code: string; severity: string }) => FILING_ERRORS.has(c.code) && c.severity === "error";
+  const errors = checks.filter(blocking).map((c) => ({ ...c, severity: "error" as const }));
+  const warnings = checks.filter((c) => !blocking(c)).map((c) => ({ ...c, severity: "warning" as const }));
+  const f = filedRecord(regId, period, rt);
+  return {
+    registrationId: regId,
+    gstin: reg.gstin,
+    returnType: rt,
+    label: RETURN_LABEL[rt],
+    period,
+    periodLabel: label,
+    dueDate: due,
+    filing: f
+      ? { id: f.id, channel: "offline", arn: f.arn, filedOn: f.filedOn, note: f.note, returnPackVersion: "2026.11.1", rulePackVersion: "2026.11.1", summary: f.summary, warningCount: f.warningCount, recordedAt: f.recordedAt, recordedBy: "owner", files: f.files }
+      : null,
+    removed: filings
+      .filter((x) => x.status === "removed" && x.regId === regId && x.period === period && x.returnType === rt)
+      .map((x) => ({ arn: x.arn, filedOn: x.filedOn, removedAt: x.removedAt, removedBy: "owner", reason: x.reason })),
+    validation: { packVersion: "2026.11.1", errors, warnings, canFile: errors.length === 0 },
+    summary,
+    changedSinceFiling: !!f && JSON.stringify(f.summary) !== JSON.stringify(summary),
+  };
+}
+
+function previewRecordFiling(regId: string, period: string, rt: FilingReturnType, input: FilingInput): FilingView {
+  const v = previewReturnFiling(regId, period, rt);
+  const e: [string, string][] = [];
+  const arn = input.arn.replace(/\s+/g, "").toUpperCase();
+  if (!/^[A-Z0-9]{15}$/.test(arn)) e.push(["arn", "Enter the 15-character ARN from the acknowledgement."]);
+  const today = isoLocal(new Date());
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(input.filedOn)) e.push(["filedOn", "Enter the filing date."]);
+  else if (input.filedOn > today) e.push(["filedOn", "The filing date can't be in the future."]);
+  else if (input.filedOn < `${nextMonth(period)}-01`) e.push(["filedOn", `A return for ${monthName(period)} can only be filed after the month ends.`]);
+  if (input.acknowledgement) {
+    if (!/\.(pdf|png|jpe?g)$/i.test(input.acknowledgement.fileName)) e.push(["acknowledgement", "Attach the acknowledgement as a PDF, PNG or JPG."]);
+    else if (input.acknowledgement.bytes.length > 5 * 1024 * 1024) e.push(["acknowledgement", "The acknowledgement must be 5 MB or smaller."]);
+  }
+  if (e.length) fail(e);
+  if (v.filing) conflict(`${v.label} for ${v.periodLabel} is already recorded as filed.`);
+  if (!v.validation.canFile) throw { code: "invalid_input", message: `Fix the ${v.validation.errors.length} errors first, so the books match what was filed.`, fields: [] } satisfies Fail;
+  const reg = regs.find((r) => r.id === regId)!;
+  const stamp = `${period.slice(5)}${period.slice(0, 4)}`;
+  const file = (kind: FilingFile["kind"], fileName: string, sizeBytes: number): FilingFile => ({ id: crypto.randomUUID(), kind, fileName, sizeBytes });
+  const files =
+    rt === "gstr1"
+      ? [file("portal_json", `GSTR1_${reg.gstin}_${stamp}.json`, 2048), file("workpaper_json", `GSTR1_workpaper_${reg.gstin}_${stamp}.json`, 8192)]
+      : [file("workpaper_xlsx", `GSTR3B_workpaper_${reg.gstin}_${stamp}.xlsx`, 16384), file("workpaper_json", `GSTR3B_workpaper_${reg.gstin}_${stamp}.json`, 8192)];
+  if (input.acknowledgement) files.push(file("acknowledgement", input.acknowledgement.fileName, input.acknowledgement.bytes.length));
+  const rec: PreviewFiling = {
+    id: crypto.randomUUID(), regId, returnType: rt, period, status: "filed", arn, filedOn: input.filedOn, note: input.note?.trim() || null,
+    summary: v.summary, warningCount: v.validation.warnings.length, recordedAt: now(), files, removedAt: null, reason: null,
+  };
+  filings.push(rec);
+  log("gst_filing.recorded", rec.id, rec);
+  return previewReturnFiling(regId, period, rt);
+}
+
+function previewRemoveFiling(regId: string, period: string, rt: FilingReturnType, reason: string): FilingView {
+  if (!String(reason ?? "").trim()) fail([["reason", "Say why the filing record is being removed."]]);
+  const f = filedRecord(regId, period, rt) ?? nf("Filing record not found");
+  Object.assign(f, { status: "removed", removedAt: now(), reason: reason.trim() });
+  log("gst_filing.removed", f.id, f);
+  return previewReturnFiling(regId, period, rt);
+}
+
 function previewReturnCentre(regId: string | null, fyCode: string | null): ReturnCentre {
   const active = regs.filter((r) => r.registrationType !== "composition");
   const reg = active.find((r) => r.id === regId) ?? active.find((r) => r.status === "active") ?? active[0] ?? null;
@@ -1290,6 +1461,8 @@ function previewReturnCentre(regId: string | null, fyCode: string | null): Retur
         cashPayablePaise: three.offset.cashTotal,
         gstr2bImported: recon2b.has(`${reg.id}|${p}`),
         gstr2bNeedsReview: recon2b.has(`${reg.id}|${p}`) ? previewGstr2b(reg.id, p).needsReview : 0,
+        gstr1Filed: filedBadge(reg.id, p, "gstr1"),
+        gstr3bFiled: filedBadge(reg.id, p, "gstr3b"),
       });
     }
   }
@@ -1419,6 +1592,8 @@ function salesCommand(command: string, args: Record<string, any>): unknown {
     case "save_sales_draft":
       return salesView(writeSales(args.id, args.input).id);
     case "issue_sales_document": {
+      const lockS = previewGstLock(args.input.gstRegistrationId ?? null, args.input.docDate, "sales");
+      if (lockS) fail([["docDate", `${lockS} is recorded as filed, so nothing can be issued in that month. Date it in an open month.`]]);
       const d = writeSales(args.id, args.input);
       const sr = series.find((x) => x.isDefault && x.documentType === d.docType && x.gstRegistrationId === d.gstRegistrationId);
       if (!sr) fail([["docDate", "There's no number series for this document. Add one in Settings → Numbering."]]);
@@ -1432,6 +1607,8 @@ function salesCommand(command: string, args: Record<string, any>): unknown {
     }
     case "cancel_sales_document": {
       const d = salesDocs.find((x) => x.id === args.id)!;
+      const lockC = previewGstLock(d.gstRegistrationId, d.docDate, "sales");
+      if (lockC) conflict(`${lockC} is recorded as filed with this document, so it can't be cancelled. Issue a credit note in an open month instead.`);
       if (!String(args.reason).trim()) fail([["reason", "Say why it's being cancelled."]]);
       if (salesDocs.some((x) => x.originalDocumentId === d.id && x.status !== "cancelled"))
         throw { code: "conflict", message: "This invoice has credit notes. Cancel or delete them first.", fields: [] } satisfies Fail;
@@ -1573,7 +1750,7 @@ function writePurchase(id: string | null, input: PurchaseDocumentInput) {
         id: crypto.randomUUID(), documentId: docId, lineNo: i + 1, itemId: l.itemId ?? null, accountId: l.accountId, description: l.description || items.find((x) => x.id === l.itemId)?.name || "",
         hsnSac: l.hsnSac ?? null, unit: l.unit ?? null, quantity: l.quantity, unitPricePaise: toPaise(l.unitPrice) ?? 0, discountPaise: toPaise(l.discount) ?? 0,
         taxCategory: l.taxCategory, gstRateBp: toBp(l.gstRate), cessRateBp: 0, ...lc, itcStatus: itc, itcReason: l.itcReason ?? null,
-        itcEligiblePaise: itc === "eligible" ? tax : itc === "partial" ? (toPaise(l.itcEligible) ?? 0) : 0, itcReviewedAt: null, itcReviewedBy: null, itcCommon: !!l.itcCommon && (itc === "eligible" || itc === "partial"),
+        itcEligiblePaise: itc === "eligible" ? tax : itc === "partial" ? (toPaise(l.itcEligible) ?? 0) : 0, itcReviewedAt: null, itcReviewedBy: null, itcCommon: !!l.itcCommon && (itc === "eligible" || itc === "partial"), itcPeriod: null,
       };
     }),
   };
@@ -1595,6 +1772,8 @@ async function purchaseCommand(command: string, args: Record<string, any>): Prom
     case "save_purchase_draft":
       return purchaseView(writePurchase(args.id, args.input).id);
     case "record_purchase": {
+      const lockP = previewGstLock(args.input.gstRegistrationId ?? null, args.input.docDate, "purchases");
+      if (lockP) fail([["docDate", `${lockP} is recorded as filed, so nothing can be recorded in that month. Date it in an open month; its ITC is claimed there.`]]);
       const d = writePurchase(args.id, args.input);
       if (d.docType === "debit_note") {
         const sr = series.find((x) => x.isDefault && x.documentType === "debit_note");
@@ -1619,6 +1798,14 @@ async function purchaseCommand(command: string, args: Record<string, any>): Prom
       if (["eligible", "partial"].includes(st) && !d.partyGstin && !d.reverseCharge) fail([["itcStatus", "Input tax can only be claimed on a registered supplier's tax invoice."]]);
       const eligible = st === "eligible" ? tax : st === "partial" ? (toPaise(args.input.eligible) ?? 0) : 0;
       if (st === "partial" && !(eligible > 0 && eligible < tax)) fail([["itcEligible", "Enter an amount between ₹0 and the line's GST."]]);
+      const regOf = d.gstRegistrationId ?? regs[0]?.id ?? "";
+      let claimMonth = l.itcPeriod ?? d.docDate.slice(0, 7);
+      if (filedRecord(regOf, claimMonth, "gstr3b")) {
+        if (l.itcStatus !== "pending") conflict(`GSTR-3B for ${monthName(claimMonth)} is recorded as filed with this line's ITC, so its review can't change. Correct it with a debit note in an open month.`);
+        do claimMonth = nextMonth(claimMonth);
+        while (filedRecord(regOf, claimMonth, "gstr3b"));
+        l.itcPeriod = claimMonth;
+      }
       Object.assign(l, { itcStatus: st, itcReason: args.input.reason || null, itcEligiblePaise: eligible, itcReviewedAt: now(), itcReviewedBy: "owner", itcCommon: !!args.input.common && (st === "eligible" || st === "partial") });
       d.rowVersion += 1;
       log("purchase_line.itc_review", l.id, l);
@@ -1626,6 +1813,8 @@ async function purchaseCommand(command: string, args: Record<string, any>): Prom
     }
     case "cancel_purchase": {
       const d = purchaseDocs.find((x) => x.id === args.id)!;
+      const lockX = previewGstLock(d.gstRegistrationId, d.docDate, "purchases");
+      if (lockX) conflict(`${lockX} is recorded as filed with this purchase, so it can't be cancelled. Record a debit note in an open month instead.`);
       if (!String(args.reason).trim()) fail([["reason", "Say why it's being cancelled."]]);
       if (purchaseDocs.some((x) => x.originalDocumentId === d.id && x.status !== "cancelled"))
         throw { code: "conflict", message: "This bill has debit notes. Cancel or delete them first.", fields: [] } satisfies Fail;
@@ -2394,6 +2583,15 @@ function reportCommand(command: string, args: Record<string, any>): unknown {
       return previewReturnCentre(args.registrationId ?? null, args.financialYear ?? null);
     case "gstr1":
       return previewWorkpaper(args.registrationId, args.period);
+    case "return_filing":
+      return previewReturnFiling(args.registrationId, args.period, args.returnType);
+    case "record_filing":
+      return previewRecordFiling(args.registrationId, args.period, args.returnType, args.input);
+    case "remove_filing":
+      return previewRemoveFiling(args.registrationId, args.period, args.returnType, args.reason);
+    case "save_filing_pack":
+    case "save_compliance_pack":
+      throw { code: "invalid_input", message: "Saving the pack runs in the desktop app.", fields: [] } satisfies Fail;
     case "gstr2b":
       return previewGstr2b(args.registrationId, args.period);
     case "import_gstr2b":
@@ -2606,7 +2804,7 @@ function hostCommand(command: string, args: Record<string, any>): unknown {
       throw { code: "invalid_input", message: "The browser preview can't restart. Restoring runs in the desktop app.", fields: [] } satisfies Fail;
     case "check_update":
       return {
-        currentVersion: "0.2.5",
+        currentVersion: "0.2.6",
         version: "0.3.0",
         date: new Date(Date.now() - 86_400_000).toISOString(),
         notes: "AccountsVU 0.3.0 — sample release notes from the browser preview.",
@@ -2630,7 +2828,7 @@ export async function previewBackend(command: string, args: Record<string, any> 
   if (hosted !== undefined) return hosted;
   switch (command) {
     case "app_health":
-      return { appVersion: "0.2.5", schemaVersion: 11, database: "(browser preview — in memory)", organisationConfigured: !!org };
+      return { appVersion: "0.2.6", schemaVersion: 12, database: "(browser preview — in memory)", organisationConfigured: !!org };
     case "dashboard_summary":
       return {
         salesThisMonth: "0", purchasesThisMonth: "0",

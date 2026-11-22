@@ -36,7 +36,7 @@ fn series(id: &str, org: &str, doc: &str, prefix: &str) -> SeriesRecord {
 #[tokio::test]
 async fn migrates_and_reports_version() {
     let store = store_with_orgs(&[]).await;
-    assert_eq!(store.schema_version().await.unwrap(), 11);
+    assert_eq!(store.schema_version().await.unwrap(), 12);
     let mut u = store.begin().await.unwrap();
     assert_eq!(u.organisation_count().await.unwrap(), 0);
     assert_eq!(
@@ -244,7 +244,7 @@ async fn snapshot_writes_a_checkable_copy() {
     assert!(dest.exists(), "snapshot file missing at {}", dest.display());
     let check = crate::sqlite::inspect_database(&dest).await.unwrap();
     assert!(check.is_sound());
-    assert_eq!(check.schema_version, 11);
+    assert_eq!(check.schema_version, 12);
     assert!(store.snapshot(&dest).await.is_err(), "never overwrites");
     let memory = SqliteStore::open_in_memory().await.unwrap();
     assert!(memory.snapshot(&dir.join("mem.sqlite3")).await.is_err());
@@ -271,4 +271,73 @@ async fn closing_releases_the_file() {
     }
     assert!(ok);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn filed_gst_months_are_locked_by_the_database() {
+    let store = store_with_orgs(&["o"]).await;
+    let p = store.pool();
+    for sql in [
+        "INSERT INTO gst_registration (id, organisation_id, gstin, state_code, effective_from, created_at) VALUES ('r', 'o', '27AAPFU0939F1ZV', 27, '2026-04-01', 't')",
+        "INSERT INTO party (id, organisation_id, kind, name, gst_type, state_code, created_at, updated_at) VALUES ('c', 'o', 'customer', 'C', 'consumer', 27, 't', 't')",
+        "INSERT INTO journal_entry (id, organisation_id, entry_date, source_type, posted_at) VALUES ('j', 'o', '2026-10-17', 'sales_invoice', 't')",
+        "INSERT INTO sales_document (id, organisation_id, doc_type, status, gst_registration_id, doc_date, party_id, party_name, party_gst_type, place_of_supply, supplier_state, supply_kind, total_paise, created_at, updated_at) VALUES ('d', 'o', 'tax_invoice', 'draft', 'r', '2026-10-17', 'c', 'C', 'consumer', 27, 27, 'intra_state', 100, 't', 't')",
+        "INSERT INTO sales_line (id, document_id, line_no, description, quantity, unit_price_paise, tax_category, amount_paise, taxable_paise, total_paise) VALUES ('l', 'd', 1, 'x', '1', 100, 'exempt', 100, 100, 100)",
+        "INSERT INTO gst_filing (id, organisation_id, gst_registration_id, return_type, period, status, channel, arn, filed_on, return_pack_version, rule_pack_version, summary_json, workpaper_sha256, warning_count, recorded_at, recorded_by) VALUES ('f', 'o', 'r', 'gstr1', '2026-10', 'filed', 'offline', 'AA2710260012345', '2026-11-10', 'x', 'x', '{}', '', 0, 't', 'u')",
+        // Drafts stay editable.
+        "UPDATE sales_document SET party_name = 'C2' WHERE id = 'd'",
+    ] {
+        sqlx::query(sql).execute(p).await.unwrap();
+    }
+    let issue = "UPDATE sales_document SET status = 'issued', number = 'INV/1', journal_entry_id = 'j' WHERE id = 'd'";
+    assert!(
+        sqlx::query(issue).execute(p).await.is_err(),
+        "issuing in a filed month"
+    );
+    // A second filed record for the same return and month is refused.
+    assert!(
+        sqlx::query("INSERT INTO gst_filing (id, organisation_id, gst_registration_id, return_type, period, status, channel, arn, filed_on, return_pack_version, rule_pack_version, summary_json, workpaper_sha256, warning_count, recorded_at, recorded_by) VALUES ('f2', 'o', 'r', 'gstr1', '2026-10', 'filed', 'offline', 'AA2710260012399', '2026-11-10', 'x', 'x', '{}', '', 0, 't', 'u')")
+            .execute(p)
+            .await
+            .is_err()
+    );
+    // A purchase isn't locked by GSTR-1.
+    for sql in [
+        "INSERT INTO party (id, organisation_id, kind, name, gst_type, state_code, created_at, updated_at) VALUES ('s', 'o', 'supplier', 'S', 'regular', 27, 't', 't')",
+        "INSERT INTO account (id, organisation_id, code, name, kind, created_at) VALUES ('a', 'o', '5000', 'Purchases', 'expense', 't')",
+        "INSERT INTO journal_entry (id, organisation_id, entry_date, source_type, posted_at) VALUES ('jp', 'o', '2026-10-17', 'purchase', 't')",
+        "INSERT INTO purchase_document (id, organisation_id, doc_type, status, gst_registration_id, doc_date, party_id, place_of_supply, supplier_state, supply_kind, payment_mode, total_paise, created_at, updated_at) VALUES ('pd', 'o', 'bill', 'draft', 'r', '2026-10-17', 's', 27, 27, 'intra_state', 'credit', 118, 't', 't')",
+        "INSERT INTO purchase_line (id, document_id, line_no, account_id, description, quantity, unit_price_paise, tax_category, amount_paise, taxable_paise, cgst_paise, sgst_paise, total_paise, itc_status) VALUES ('pl', 'pd', 1, 'a', 'x', '1', 100, 'taxable', 100, 100, 9, 9, 118, 'pending')",
+    ] {
+        sqlx::query(sql).execute(p).await.unwrap();
+    }
+    // ... but GSTR-3B locks both.
+    sqlx::query("INSERT INTO gst_filing (id, organisation_id, gst_registration_id, return_type, period, status, channel, arn, filed_on, return_pack_version, rule_pack_version, summary_json, workpaper_sha256, warning_count, recorded_at, recorded_by) VALUES ('f3', 'o', 'r', 'gstr3b', '2026-10', 'filed', 'offline', 'AA2710260012346', '2026-11-15', 'x', 'x', '{}', '', 0, 't', 'u')")
+        .execute(p)
+        .await
+        .unwrap();
+    assert!(
+        sqlx::query("UPDATE purchase_document SET status = 'recorded', journal_entry_id = 'jp' WHERE id = 'pd'")
+            .execute(p)
+            .await
+            .is_err(),
+        "recording in a filed month"
+    );
+    // Re-dating the draft out of the filed month lets it through.
+    sqlx::query("UPDATE purchase_document SET doc_date = '2026-11-02' WHERE id = 'pd'")
+        .execute(p)
+        .await
+        .unwrap();
+    sqlx::query(
+        "UPDATE purchase_document SET status = 'recorded', journal_entry_id = 'jp' WHERE id = 'pd'",
+    )
+    .execute(p)
+    .await
+    .unwrap();
+    // Removing both records unlocks October.
+    sqlx::query("UPDATE gst_filing SET status = 'removed'")
+        .execute(p)
+        .await
+        .unwrap();
+    sqlx::query(issue).execute(p).await.unwrap();
 }

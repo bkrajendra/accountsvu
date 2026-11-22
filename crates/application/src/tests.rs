@@ -56,7 +56,7 @@ async fn fresh_install_health_and_dashboard() {
     let core = core().await;
     let h = core.health().await.unwrap();
     assert!(!h.organisation_configured);
-    assert_eq!(h.schema_version, 11);
+    assert_eq!(h.schema_version, 12);
     let d = core
         .dashboard_summary(&ctx(), "2026-11-01", "2026-11-30")
         .await
@@ -3443,7 +3443,7 @@ async fn backup_restores_on_a_clean_install_and_checks_the_books() {
         .unwrap();
     assert!(backup.file_name.starts_with("Umang-") && backup.file_name.ends_with(".avbackup"));
     assert_eq!(backup.header.business_name, "Umang");
-    assert_eq!(backup.header.schema_version, 11);
+    assert_eq!(backup.header.schema_version, 12);
     let status = s
         .core
         .record_backup(&ctx(), &backup.file_name, &backup.bytes)
@@ -4227,4 +4227,364 @@ async fn gstr2b_import_reconcile_and_decide() {
     let audit = b.core.list_audit_events(&ctx(), 50).await.unwrap();
     assert!(audit.iter().any(|e| e.action == "gstr2b.imported"));
     assert!(audit.iter().any(|e| e.action == "gstr2b.decided"));
+}
+
+#[tokio::test]
+async fn gst_filing_records_arn_locks_the_month_and_moves_late_itc() {
+    use crate::filing::{AcknowledgementInput, FilingInput};
+    let b = books().await;
+    let oct = |date: &str, number: &str, itc: Option<&str>| PurchaseDocumentInput {
+        supplier_invoice_date: Some(date.into()),
+        doc_date: date.into(),
+        ..bill(
+            &b.supplier,
+            number,
+            vec![pline(&b.purchases_acc, "10000", "18", itc)],
+        )
+    };
+    let s1 = b
+        .core
+        .record_purchase(
+            &ctx(),
+            None,
+            oct("2026-10-06", "S-1", Some("eligible")),
+            None,
+        )
+        .await
+        .unwrap();
+    let s2 = b
+        .core
+        .record_purchase(&ctx(), None, oct("2026-10-07", "S-2", None), None)
+        .await
+        .unwrap();
+    let sale = b
+        .core
+        .issue_sales_document(
+            &ctx(),
+            None,
+            invoice(
+                &b.customer,
+                "2026-10-10",
+                vec![line(None, "1", "50000", "18")],
+            ),
+            None,
+        )
+        .await
+        .unwrap();
+    let reg = b
+        .core
+        .return_centre(&ctx(), None, None)
+        .await
+        .unwrap()
+        .registration_id
+        .unwrap();
+
+    // November isn't over (today is 17 Nov): blocking.
+    let nov = b
+        .core
+        .return_filing(&ctx(), &reg, "2026-11", "gstr1")
+        .await
+        .unwrap();
+    assert!(!nov.validation.can_file);
+    assert!(
+        nov.validation
+            .errors
+            .iter()
+            .any(|e| e.code == "period_open")
+    );
+    let nov_pack = b.core.filing_pack(&ctx(), &reg, "2026-11", "gstr1").await;
+    assert!(
+        matches!(nov_pack, Err(AppError::Invalid(_))),
+        "{nov_pack:?}"
+    );
+
+    // October GSTR-1: files with a warning for the unfiled September.
+    let g1 = b
+        .core
+        .return_filing(&ctx(), &reg, "2026-10", "gstr1")
+        .await
+        .unwrap();
+    assert!(g1.validation.can_file, "{:?}", g1.validation.errors);
+    assert!(
+        g1.validation
+            .warnings
+            .iter()
+            .any(|w| w.code == "previous_unfiled")
+    );
+    assert!(g1.filing.is_none());
+    let pack = b
+        .core
+        .filing_pack(&ctx(), &reg, "2026-10", "gstr1")
+        .await
+        .unwrap();
+    assert!(pack.bytes.starts_with(b"PK"));
+    assert!(pack.file_name.starts_with("GSTR1_filing_pack_"));
+
+    let input = |arn: &str, on: &str| FilingInput {
+        arn: arn.into(),
+        filed_on: on.into(),
+        note: None,
+        acknowledgement: None,
+    };
+    let err = b
+        .core
+        .record_filing(
+            &ctx(),
+            &reg,
+            "2026-10",
+            "gstr1",
+            input("AA27102600", "2026-10-31"),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(fields(&err), vec!["arn", "filedOn"]);
+    let err = b
+        .core
+        .record_filing(
+            &ctx(),
+            &reg,
+            "2026-10",
+            "gstr1",
+            input("AA2710260012345", "2026-11-30"),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(fields(&err), vec!["filedOn"]);
+    let filed = b
+        .core
+        .record_filing(
+            &ctx(),
+            &reg,
+            "2026-10",
+            "gstr1",
+            FilingInput {
+                note: Some("Filed through the offline tool".into()),
+                acknowledgement: Some(AcknowledgementInput {
+                    file_name: "ack.pdf".into(),
+                    bytes: b"%PDF-1.4 acknowledgement".to_vec(),
+                }),
+                ..input("aa27 1026 0012 345", "2026-11-10")
+            },
+        )
+        .await
+        .unwrap();
+    let rec = filed.filing.as_ref().unwrap();
+    assert_eq!(rec.arn, "AA2710260012345");
+    assert_eq!(rec.channel, "offline");
+    let mut kinds: Vec<&str> = rec.files.iter().map(|f| f.kind.as_str()).collect();
+    kinds.sort_unstable();
+    assert_eq!(
+        kinds,
+        vec!["acknowledgement", "portal_json", "workpaper_json"]
+    );
+    assert!(!filed.changed_since_filing);
+    let again = b
+        .core
+        .record_filing(
+            &ctx(),
+            &reg,
+            "2026-10",
+            "gstr1",
+            input("AA2710260012399", "2026-11-10"),
+        )
+        .await;
+    assert!(matches!(again, Err(AppError::Conflict(_))));
+    let pack_again = b.core.filing_pack(&ctx(), &reg, "2026-10", "gstr1").await;
+    assert!(matches!(pack_again, Err(AppError::Conflict(_))));
+
+    // GSTR-1 locks October sales, not purchases.
+    let late = invoice(
+        &b.customer,
+        "2026-10-20",
+        vec![line(None, "1", "1000", "18")],
+    );
+    let err = b
+        .core
+        .issue_sales_document(&ctx(), None, late.clone(), None)
+        .await
+        .unwrap_err();
+    assert_eq!(fields(&err), vec!["docDate"]);
+    let cancel = b
+        .core
+        .cancel_sales_document(
+            &ctx(),
+            &sale.document.id,
+            "Wrong party",
+            sale.document.row_version,
+        )
+        .await;
+    assert!(matches!(cancel, Err(AppError::Conflict(_))), "{cancel:?}");
+    b.core
+        .record_purchase(
+            &ctx(),
+            None,
+            oct("2026-10-08", "S-3", Some("eligible")),
+            None,
+        )
+        .await
+        .unwrap();
+
+    // October GSTR-3B: ITC pending and no 2B are warnings only.
+    let g3 = b
+        .core
+        .return_filing(&ctx(), &reg, "2026-10", "gstr3b")
+        .await
+        .unwrap();
+    assert!(g3.validation.can_file, "{:?}", g3.validation.errors);
+    let codes: Vec<&str> = g3.validation.warnings.iter().map(|w| w.code).collect();
+    assert!(
+        codes.contains(&"itc_pending") && codes.contains(&"gstr2b_missing"),
+        "{codes:?}"
+    );
+    assert!(!codes.contains(&"gstr1_unfiled"));
+    let filed3 = b
+        .core
+        .record_filing(
+            &ctx(),
+            &reg,
+            "2026-10",
+            "gstr3b",
+            input("AA2710260012346", "2026-11-15"),
+        )
+        .await
+        .unwrap();
+    let rec3 = filed3.filing.as_ref().unwrap();
+    assert!(rec3.files.iter().any(|f| f.kind == "workpaper_xlsx"));
+    assert_eq!(filed3.summary["itcNet"], g3.summary["itcNet"]);
+
+    // GSTR-3B locks October purchases.
+    let err = b
+        .core
+        .record_purchase(
+            &ctx(),
+            None,
+            oct("2026-10-09", "S-4", Some("eligible")),
+            None,
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(fields(&err), vec!["docDate"]);
+    let cancel = b
+        .core
+        .cancel_purchase(
+            &ctx(),
+            &s1.document.id,
+            "Duplicate",
+            s1.document.row_version,
+        )
+        .await;
+    assert!(matches!(cancel, Err(AppError::Conflict(_))));
+
+    // A claimed line can't be re-reviewed; a pending one moves to November.
+    let claimed = b
+        .core
+        .review_itc(
+            &ctx(),
+            &s1.document.id,
+            &s1.lines[0].id,
+            ItcReviewInput {
+                status: "ineligible".into(),
+                reason: Some("Personal use".into()),
+                ..Default::default()
+            },
+            s1.document.row_version,
+        )
+        .await;
+    assert!(matches!(claimed, Err(AppError::Conflict(_))), "{claimed:?}");
+    let moved = b
+        .core
+        .review_itc(
+            &ctx(),
+            &s2.document.id,
+            &s2.lines[0].id,
+            ItcReviewInput {
+                status: "eligible".into(),
+                ..Default::default()
+            },
+            s2.document.row_version,
+        )
+        .await
+        .unwrap();
+    assert_eq!(moved.lines[0].itc_period.as_deref(), Some("2026-11"));
+    let nov3b = b.core.gstr3b(&ctx(), &reg, "2026-11").await.unwrap();
+    let moved_line = nov3b
+        .itc_lines
+        .iter()
+        .find(|l| l.document_id == s2.document.id)
+        .unwrap();
+    assert_eq!(moved_line.moved_from.as_deref(), Some("2026-10"));
+    assert_eq!(moved_line.table, "4A(5)");
+    assert_eq!(nov3b.itc_net.total(), 180_000);
+    let oct3b = b
+        .core
+        .return_filing(&ctx(), &reg, "2026-10", "gstr3b")
+        .await
+        .unwrap();
+    assert!(!oct3b.changed_since_filing, "October as filed is untouched");
+
+    // Return centre and compliance pack.
+    let centre = b
+        .core
+        .return_centre(&ctx(), Some(&reg), None)
+        .await
+        .unwrap();
+    let p = centre
+        .periods
+        .iter()
+        .find(|p| p.period == "2026-10")
+        .unwrap();
+    assert_eq!(p.gstr1_filed.as_ref().unwrap().arn, "AA2710260012345");
+    assert_eq!(p.gstr3b_filed.as_ref().unwrap().filed_on, "2026-11-15");
+    let cp = b
+        .core
+        .compliance_pack(&ctx(), &reg, "2026-10", "gstr1")
+        .await
+        .unwrap();
+    assert!(cp.bytes.starts_with(b"PK"));
+    assert!(cp.file_name.starts_with("GSTR1_compliance_pack_"));
+    let none = b
+        .core
+        .compliance_pack(&ctx(), &reg, "2026-11", "gstr1")
+        .await;
+    assert!(matches!(none, Err(AppError::Conflict(_))));
+
+    // Removing a record needs a reason; the month stays locked while the
+    // GSTR-3B is still filed, and opens once both are removed.
+    let err = b
+        .core
+        .remove_filing(&ctx(), &reg, "2026-10", "gstr1", "  ")
+        .await
+        .unwrap_err();
+    assert_eq!(fields(&err), vec!["reason"]);
+    let removed = b
+        .core
+        .remove_filing(
+            &ctx(),
+            &reg,
+            "2026-10",
+            "gstr1",
+            "Recorded against the wrong month",
+        )
+        .await
+        .unwrap();
+    assert!(removed.filing.is_none());
+    assert_eq!(removed.removed.len(), 1);
+    let err = b
+        .core
+        .issue_sales_document(&ctx(), None, late.clone(), None)
+        .await
+        .unwrap_err();
+    assert_eq!(fields(&err), vec!["docDate"]);
+    b.core
+        .remove_filing(&ctx(), &reg, "2026-10", "gstr3b", "Testing")
+        .await
+        .unwrap();
+    b.core
+        .issue_sales_document(&ctx(), None, late, None)
+        .await
+        .unwrap();
+    let audit = b.core.list_audit_events(&ctx(), 200).await.unwrap();
+    assert!(audit.iter().any(|e| e.action == "gst_filing.recorded"));
+    assert!(audit.iter().any(|e| e.action == "gst_filing.removed"));
+    assert!(audit.iter().any(|e| e.action == "gst_filing.pack_exported"));
 }

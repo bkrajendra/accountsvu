@@ -1,22 +1,26 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link, useNavigate, useSearchParams } from "react-router";
-import { AlertCircle, AlertTriangle, CalendarClock, ChevronLeft, ChevronRight, FileCheck2, Info } from "lucide-react";
-import { api, keys, type PeriodStatus, type ReturnCentre as Centre, type ReturnPeriod } from "../../lib/api";
+import { AlertCircle, AlertTriangle, CalendarClock, CheckCircle2, ChevronLeft, ChevronRight, FileCheck2, Info } from "lucide-react";
+import { api, keys, type FiledBadge, type PeriodStatus, type ReturnCentre as Centre, type ReturnPeriod } from "../../lib/api";
 import { formatPaise } from "../../lib/format";
 import { shortDate, todayIso } from "../../lib/sales";
 import { Badge, Button, Card, EmptyState, PageHeader } from "../../components/ui";
 import { Loading } from "../reports/common";
 
-export function statusBadge(status: PeriodStatus, due: string) {
+export function statusBadge(status: PeriodStatus, due: string, filed?: FiledBadge | null) {
+  if (filed)
+    return (
+      <Badge tone="success" icon={<CheckCircle2 size={11} />}>
+        Filed {shortDate(filed.filedOn)}
+      </Badge>
+    );
   switch (status) {
     case "open":
       return <Badge>In progress</Badge>;
     case "due":
       return <Badge tone="accent">Due {shortDate(due)}</Badge>;
     default:
-      // Filing status comes with offline filing (2.5); until then a past due
-      // date is information, not an alarm.
-      return <Badge>Was due {shortDate(due)}</Badge>;
+      return <Badge tone="warning">Not filed · was due {shortDate(due)}</Badge>;
   }
 }
 
@@ -173,8 +177,8 @@ type Due = { kind: "gstr1" | "gstr3b"; p: ReturnPeriod; due: string };
 function nextDue(periods: ReturnPeriod[]): Due | undefined {
   const today = todayIso();
   const all: Due[] = periods.flatMap((p) => [
-    ...(p.status === "due" && p.gstr1Due >= today ? [{ kind: "gstr1" as const, p, due: p.gstr1Due }] : []),
-    ...(p.gstr3bStatus === "due" && p.gstr3bDue >= today ? [{ kind: "gstr3b" as const, p, due: p.gstr3bDue }] : []),
+    ...(p.status === "due" && !p.gstr1Filed && p.gstr1Due >= today ? [{ kind: "gstr1" as const, p, due: p.gstr1Due }] : []),
+    ...(p.gstr3bStatus === "due" && !p.gstr3bFiled && p.gstr3bDue >= today ? [{ kind: "gstr3b" as const, p, due: p.gstr3bDue }] : []),
   ]);
   return all.sort((a, b) => a.due.localeCompare(b.due))[0];
 }
@@ -182,10 +186,10 @@ function nextDue(periods: ReturnPeriod[]): Due | undefined {
 function PeriodRow({ p, reg }: { p: ReturnPeriod; reg: string }) {
   const navigate = useNavigate();
   const go = (kind: "gstr1" | "gstr3b") => navigate(`/gst/${kind}/${p.period}?reg=${reg}`);
-  const cell = (kind: "gstr1" | "gstr3b", status: PeriodStatus, due: string) => (
+  const cell = (kind: "gstr1" | "gstr3b", status: PeriodStatus, due: string, filed: FiledBadge | null) => (
     <td className="px-3 py-2.5">
       <Link to={`/gst/${kind}/${p.period}?reg=${reg}`} onClick={(e) => e.stopPropagation()} className="group inline-flex items-center gap-1">
-        {statusBadge(status, due)}
+        {statusBadge(status, due, filed)}
         <ChevronRight size={14} className="text-subtle group-hover:text-fg" />
       </Link>
     </td>
@@ -193,8 +197,8 @@ function PeriodRow({ p, reg }: { p: ReturnPeriod; reg: string }) {
   return (
     <tr onClick={() => go("gstr1")} className="cursor-pointer hover:bg-hover">
       <td className="px-4 py-2.5 font-medium">{p.label}</td>
-      {cell("gstr1", p.status, p.gstr1Due)}
-      {cell("gstr3b", p.gstr3bStatus, p.gstr3bDue)}
+      {cell("gstr1", p.status, p.gstr1Due, p.gstr1Filed)}
+      {cell("gstr3b", p.gstr3bStatus, p.gstr3bDue, p.gstr3bFiled)}
       <td className="px-3 py-2.5">
         <Link to={`/gst/gstr2b/${p.period}?reg=${reg}`} onClick={(e) => e.stopPropagation()} className="group inline-flex items-center gap-1">
           {!p.gstr2bImported ? (

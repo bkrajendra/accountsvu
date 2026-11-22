@@ -134,6 +134,12 @@ export function PurchaseDocument() {
                       </div>
                       {l.itcStatus === "partial" && <div className="num mt-0.5 text-[12px] text-muted">{formatPaise(l.itcEligiblePaise)} claimable</div>}
                       {l.itcReason && <div className="mt-0.5 text-[12px] text-muted">{l.itcReason}</div>}
+                      {l.itcPeriod && (
+                        <div className="mt-0.5 text-[12px] text-muted">
+                          Claimed in {new Date(`${l.itcPeriod}-01T00:00:00`).toLocaleDateString("en-IN", { month: "long", year: "numeric" })}: reviewed after this
+                          month's GSTR-3B was filed
+                        </div>
+                      )}
                     </td>
                   </tr>
                 ))}

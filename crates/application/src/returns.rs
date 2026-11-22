@@ -18,12 +18,13 @@ use av_gst_engine::SupplyKind;
 use av_gst_engine::checks::{
     Gstr1Section, LineFacts, Recipient, line_warnings, place_of_supply_warning,
 };
+use av_gst_engine::returns::ReturnPack;
 use av_gst_formats::gstr1::{
     self as fmt, B2csRow, DocumentNature, DocumentSeries, Gstr1Return, HsnRow, Invoice,
     InvoiceType, NilRow, NilSupply, Note, NoteType, RateItem, UnregisteredType,
 };
 use av_persistence::records::{RegistrationRecord, SalesDocumentRecord, SalesLineRecord};
-use av_persistence::{RegistrationRepo, SalesRepo, Store, UnitOfWork};
+use av_persistence::{GstFilingRepo, RegistrationRepo, SalesRepo, Store, UnitOfWork};
 use chrono::{Datelike, NaiveDate};
 use rust_decimal::Decimal;
 use serde::Serialize;
@@ -97,6 +98,17 @@ pub struct PeriodSummary {
     pub gstr2b_imported: bool,
     /// Reconciliation rows still needing a decision (0 until imported).
     pub gstr2b_needs_review: usize,
+    /// Recorded as filed (Phase 2.5).
+    pub gstr1_filed: Option<FiledBadge>,
+    pub gstr3b_filed: Option<FiledBadge>,
+}
+
+/// A return recorded as filed, as the return centre shows it.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FiledBadge {
+    pub arn: String,
+    pub filed_on: String,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -308,9 +320,17 @@ impl Period {
         self.first().format("%B %Y").to_string()
     }
 
+    /// Due date of a monthly return in the following month (return pack).
+    pub(crate) fn due(self, return_id: &str) -> NaiveDate {
+        let day = ReturnPack::bundled()
+            .return_def(return_id)
+            .map_or(20, |r| r.due_day);
+        self.next().first().with_day(day).expect("day 1–28 exists")
+    }
+
     /// GSTR-1 (monthly) is due on the 11th of the following month.
     pub(crate) fn gstr1_due(self) -> NaiveDate {
-        self.next().first().with_day(11).expect("11th exists")
+        self.due("gstr1")
     }
 
     pub(crate) fn status(self, today: NaiveDate) -> &'static str {
@@ -319,7 +339,21 @@ impl Period {
 
     /// GSTR-3B (monthly) is due on the 20th of the following month.
     pub(crate) fn gstr3b_due(self) -> NaiveDate {
-        self.next().first().with_day(20).expect("20th exists")
+        self.due("gstr3b")
+    }
+
+    pub(crate) fn previous(self) -> Period {
+        if self.month == 1 {
+            Period {
+                year: self.year - 1,
+                month: 12,
+            }
+        } else {
+            Period {
+                year: self.year,
+                month: self.month - 1,
+            }
+        }
     }
 
     pub(crate) fn status_by(self, today: NaiveDate, due: NaiveDate) -> &'static str {
@@ -1165,6 +1199,21 @@ impl<S: Store> AppCore<S> {
             let chain = Self::chain_start(&org.books_start_date, first.first());
             let series = crate::gstr3b::build_3b_series(reg, &docs, &purchases, chain, last, today);
             let recon = self.load_recon_data(&mut uow, &org.id, reg).await?;
+            let filings: Vec<_> = uow
+                .list_gst_filings(&org.id, &reg.id)
+                .await?
+                .into_iter()
+                .filter(|f| f.status == "filed")
+                .collect();
+            let badge = |rt: &str, period: &str| {
+                filings
+                    .iter()
+                    .find(|f| f.return_type == rt && f.period == period)
+                    .map(|f| FiledBadge {
+                        arn: f.arn.clone(),
+                        filed_on: f.filed_on.clone(),
+                    })
+            };
             let mut p = first;
             while p.first() <= last.first() && p.first() <= fy.end_date() {
                 let built = build(reg, &docs, p, today);
@@ -1189,6 +1238,8 @@ impl<S: Store> AppCore<S> {
                     }
                 }
                 periods.push(PeriodSummary {
+                    gstr1_filed: badge("gstr1", &v.period),
+                    gstr3b_filed: badge("gstr3b", &v.period),
                     period: v.period,
                     label: v.label,
                     from: v.from,

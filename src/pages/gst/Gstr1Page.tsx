@@ -10,6 +10,7 @@ import { Badge, Button, Card, Segmented } from "../../components/ui";
 import { useToast } from "../../components/Toast";
 import { Amount, Loading } from "../reports/common";
 import { statusBadge, useReturnScope } from "./ReturnCentre";
+import { FilingPanel, useFiling } from "./FilingPanel";
 
 type Tab = "b2b" | "b2cl" | "exp" | "b2cs" | "nil" | "cdn" | "hsn" | "docs";
 
@@ -41,6 +42,7 @@ export function Gstr1Page() {
     queryFn: () => api.gstr1(reg!, period),
     enabled: !!reg,
   });
+  const { data: filing } = useFiling(reg, period, "gstr1");
   const [tab, setTab] = useState<Tab | null>(null);
 
   if (error) return <Card className="px-4 py-10 text-center text-[13px] text-danger">{error instanceof Error ? error.message : String(error)}</Card>;
@@ -70,11 +72,13 @@ export function Gstr1Page() {
           <ReturnSwitch current="gstr1" period={data.period} reg={data.registrationId} />
           <h1 className="text-display">{data.label}</h1>
           <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[14px] text-muted">
-            <span className="num text-fg">{data.gstin}</span> · {data.stateName} · {statusBadge(data.status, data.dueDate)}
+            <span className="num text-fg">{data.gstin}</span> · {data.stateName} · {statusBadge(data.status, data.dueDate, filing?.filing)}
           </p>
         </div>
-        <ExportButton data={data} errors={errors} />
+        {!filing?.filing && <ExportButton data={data} errors={errors} />}
       </div>
+
+      <FilingPanel reg={data.registrationId} period={data.period} returnType="gstr1" />
 
       {data.exceptions.length > 0 && <Exceptions list={data.exceptions} />}
 

@@ -98,6 +98,9 @@ pub struct ItcLine {
     pub reverse_charge: bool,
     pub tax: Heads,
     pub eligible: Heads,
+    /// The document's month when the ITC was reviewed after that month's
+    /// GSTR-3B was filed and is claimed here instead.
+    pub moved_from: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -394,10 +397,20 @@ pub(crate) fn build_3b(
     let mut common = Heads::default();
     let mut common_lines = 0;
     let mut unclaimable = 0;
-    for (d, lines) in purchases
-        .iter()
-        .filter(|(d, _)| d.status == "recorded" && ours(&d.gst_registration_id, &d.doc_date))
-    {
+    let code = period.code();
+    for (d, lines) in purchases.iter().filter(|(d, _)| {
+        d.status == "recorded" && d.gst_registration_id.as_deref() == Some(reg.id.as_str())
+    }) {
+        let in_month = ours(&d.gst_registration_id, &d.doc_date);
+        let doc_month = d.doc_date.get(..7).unwrap_or_default();
+        // ITC reviewed after the month's GSTR-3B was filed is claimed later.
+        if !in_month
+            && !lines
+                .iter()
+                .any(|l| l.itc_period.as_deref() == Some(code.as_str()))
+        {
+            continue;
+        }
         let sign = if d.doc_type == "debit_note" { -1 } else { 1 };
         let gst_type = d.party_gst_type.as_deref().unwrap_or("unregistered");
         let overseas = gst_type == "overseas";
@@ -405,7 +418,12 @@ pub(crate) fn build_3b(
         let inter_state = d.supply_kind == "inter_state";
         for l in lines {
             let tax = heads_of(l);
-            if d.reverse_charge && l.tax_category == "taxable" {
+            let claim_month = l.itc_period.as_deref().unwrap_or(doc_month);
+            if !in_month {
+                if claim_month != code {
+                    continue;
+                }
+            } else if d.reverse_charge && l.tax_category == "taxable" {
                 add_row(&mut outward, "d", sign * l.taxable_paise, scale(tax, sign));
             }
             let exempt_col = match l.tax_category.as_str() {
@@ -414,7 +432,7 @@ pub(crate) fn build_3b(
                 _ if gst_type == "composition" && tax.total() == 0 => Some(0),
                 _ => None,
             };
-            if let Some(c) = exempt_col {
+            if let Some(c) = exempt_col.filter(|_| in_month) {
                 let amount = sign * l.taxable_paise;
                 if inter_state {
                     inward[c].inter_state_paise += amount;
@@ -422,7 +440,7 @@ pub(crate) fn build_3b(
                     inward[c].intra_state_paise += amount;
                 }
             }
-            if tax.total() == 0 || l.itc_status == "na" {
+            if tax.total() == 0 || l.itc_status == "na" || claim_month != code {
                 continue;
             }
             if !has_gstin && !d.reverse_charge {
@@ -476,6 +494,7 @@ pub(crate) fn build_3b(
                 reverse_charge: d.reverse_charge,
                 tax: scale(tax, sign),
                 eligible: scale(eligible, sign),
+                moved_from: (claim_month != doc_month).then(|| doc_month.to_owned()),
             });
         }
     }
@@ -561,7 +580,11 @@ pub(crate) fn build_3b(
             let tax_row = !c.label.starts_with("Nil");
             exceptions.push(exception(
                 if tax_row { "error" } else { "warning" },
-                "gstr1_mismatch",
+                if tax_row {
+                    "gstr1_mismatch"
+                } else {
+                    "gstr1_nil_mismatch"
+                },
                 format!(
                     "{}: GSTR-1 shows {}, GSTR-3B {} (difference {}).{}",
                     c.label,

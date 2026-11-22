@@ -1197,6 +1197,22 @@ impl<S: Store> AppCore<S> {
         let mut uow = self.store.begin().await?;
         let org = self.require_org(ctx, &mut uow).await?;
         let (mut e, prepared) = self.prepare(&mut uow, &org, &input, id).await?;
+        if let Some(p) = &prepared
+            && let Some(lock) = self
+                .gst_lock(
+                    &mut uow,
+                    &org.id,
+                    p.doc.gst_registration_id.as_deref(),
+                    &p.doc.doc_date,
+                    "sales",
+                )
+                .await?
+        {
+            e.add(
+                "docDate",
+                format!("{lock} is recorded as filed, so nothing can be issued in that month. Date it in an open month."),
+            );
+        }
 
         // Numbering: the default series for this GSTIN, type and FY.
         let mut series = None;
@@ -1333,6 +1349,20 @@ impl<S: Store> AppCore<S> {
             return Err(AppError::Conflict(
                 "Only issued documents can be cancelled.".into(),
             ));
+        }
+        if let Some(lock) = self
+            .gst_lock(
+                &mut uow,
+                &org.id,
+                before.gst_registration_id.as_deref(),
+                &before.doc_date,
+                "sales",
+            )
+            .await?
+        {
+            return Err(AppError::Conflict(format!(
+                "{lock} is recorded as filed with this document, so it can't be cancelled. Issue a credit note in an open month instead."
+            )));
         }
         if uow
             .credit_notes_for(&org.id, id)

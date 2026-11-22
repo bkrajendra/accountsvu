@@ -343,7 +343,7 @@ fn parse_date(e: &mut Errors, field: &str, s: &str) -> Option<NaiveDate> {
     }
 }
 
-fn content_type_for(file_name: &str) -> Option<&'static str> {
+pub(crate) fn content_type_for(file_name: &str) -> Option<&'static str> {
     let lower = file_name.to_ascii_lowercase();
     let ext = lower.rsplit('.').next()?;
     Some(match ext {
@@ -825,6 +825,7 @@ impl<S: Store> AppCore<S> {
                         itc_reviewed_at: None,
                         itc_reviewed_by: None,
                         itc_common: l.itc_common.unwrap_or(false),
+                        itc_period: None,
                     });
                 }
             }
@@ -1296,6 +1297,22 @@ impl<S: Store> AppCore<S> {
         let mut uow = self.store.begin().await?;
         let org = self.require_org(ctx, &mut uow).await?;
         let (mut e, prepared) = self.prepare_purchase(&mut uow, &org, &input, id).await?;
+        if let Some(p) = &prepared
+            && let Some(lock) = self
+                .gst_lock(
+                    &mut uow,
+                    &org.id,
+                    p.doc.gst_registration_id.as_deref(),
+                    &p.doc.doc_date,
+                    "purchases",
+                )
+                .await?
+        {
+            e.add(
+                "docDate",
+                format!("{lock} is recorded as filed, so nothing can be recorded in that month. Date it in an open month; its ITC is claimed there."),
+            );
+        }
         let mut series = None;
         if let Some(p) = &prepared
             && p.doc.doc_type == "debit_note"
@@ -1428,6 +1445,24 @@ impl<S: Store> AppCore<S> {
         if tax == 0 {
             return Err(AppError::Invalid("this line carries no GST".into()));
         }
+        // After the claim month's GSTR-3B is filed, only a line still pending
+        // may be reviewed; its ITC moves to the first month not yet filed.
+        let filings = self
+            .filed_returns(&mut uow, &org.id, doc.gst_registration_id.as_deref())
+            .await?;
+        let doc_month = doc.doc_date.get(..7).unwrap_or_default().to_owned();
+        let claim_month = before.itc_period.clone().unwrap_or(doc_month);
+        let mut itc_period = before.itc_period.clone();
+        if crate::filing::is_filed(&filings, "gstr3b", &claim_month) {
+            let claim = crate::returns::Period::parse(&claim_month)?;
+            if before.itc_status != "pending" {
+                return Err(AppError::Conflict(format!(
+                    "GSTR-3B for {} is recorded as filed with this line's ITC, so its review can't change. Correct it with a debit note in an open month.",
+                    claim.label()
+                )));
+            }
+            itc_period = Some(crate::filing::first_open_3b(&filings, claim.next()).code());
+        }
         let registered = doc.gst_registration_id.is_some();
         let supplier_ok = doc.party_gstin.is_some()
             && matches!(doc.party_gst_type.as_deref(), Some("regular" | "sez"));
@@ -1457,6 +1492,7 @@ impl<S: Store> AppCore<S> {
         after.itc_common =
             input.common.unwrap_or(false) && matches!(dec.status, "eligible" | "partial");
         after.itc_reviewed_at = Some(now.clone());
+        after.itc_period = itc_period;
         after.itc_reviewed_by = Some(ctx.actor.user_id.clone());
         let today = self.today().format("%Y-%m-%d").to_string();
         if (after.itc_status.as_str(), after.itc_eligible_paise)
@@ -1529,6 +1565,20 @@ impl<S: Store> AppCore<S> {
             return Err(AppError::Conflict(
                 "Only recorded purchases can be cancelled.".into(),
             ));
+        }
+        if let Some(lock) = self
+            .gst_lock(
+                &mut uow,
+                &org.id,
+                before.gst_registration_id.as_deref(),
+                &before.doc_date,
+                "purchases",
+            )
+            .await?
+        {
+            return Err(AppError::Conflict(format!(
+                "{lock} is recorded as filed with this purchase, so it can't be cancelled. Record a debit note in an open month instead."
+            )));
         }
         if uow
             .debit_notes_for(&org.id, id)

@@ -26,6 +26,7 @@ aes-gcm.workspace = true
 getrandom.workspace = true
 zeroize.workspace = true
 rust_xlsxwriter = { version = "0.102", default-features = false }
+zip = { version = "9.7", default-features = false, features = ["deflate-flate2"] }
 
 [dev-dependencies]
 tokio.workspace = true

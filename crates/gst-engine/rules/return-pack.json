@@ -1,0 +1,30 @@
+{
+  "format": 1,
+  "version": "2026.11.1",
+  "returns": [
+    { "id": "gstr1", "label": "GSTR-1", "dueDay": 11, "locks": ["sales"] },
+    { "id": "gstr3b", "label": "GSTR-3B", "dueDay": 20, "locks": ["sales", "purchases"] }
+  ],
+  "checks": [
+    { "code": "period_open", "returns": ["gstr1", "gstr3b"], "severity": "error", "title": "The month isn't over yet" },
+    { "code": "previous_unfiled", "returns": ["gstr1", "gstr3b"], "severity": "warning", "title": "Previous month's return isn't recorded as filed" },
+    { "code": "missing_gstin", "returns": ["gstr1"], "severity": "error", "title": "Registered-party table without a valid GSTIN" },
+    { "code": "missing_hsn", "returns": ["gstr1"], "severity": "error", "title": "Line without HSN/SAC" },
+    { "code": "hsn_mismatch", "returns": ["gstr1"], "severity": "error", "title": "HSN summary tax doesn't match the tables" },
+    { "code": "draft", "returns": ["gstr1"], "severity": "warning", "title": "Draft dated in the month" },
+    { "code": "tax_check", "returns": ["gstr1"], "severity": "warning", "title": "Rule-pack tax check on a document" },
+    { "code": "uqc", "returns": ["gstr1"], "severity": "warning", "title": "Unit reported as OTH" },
+    { "code": "shipping_bill", "returns": ["gstr1"], "severity": "warning", "title": "Export shipping-bill details to add on the portal" },
+    { "code": "gstr1_mismatch", "returns": ["gstr3b"], "severity": "error", "title": "GSTR-1 and GSTR-3B tax differ" },
+    { "code": "gstr1_nil_mismatch", "returns": ["gstr3b"], "severity": "warning", "title": "GSTR-1 table 8 and GSTR-3B 3.1 (c)+(e) differ" },
+    { "code": "gstr1_errors", "returns": ["gstr3b"], "severity": "warning", "title": "GSTR-1 for the month has errors" },
+    { "code": "gstr1_unfiled", "returns": ["gstr3b"], "severity": "warning", "title": "GSTR-1 for the month isn't recorded as filed" },
+    { "code": "itc_pending", "returns": ["gstr3b"], "severity": "warning", "title": "Purchase lines awaiting ITC review" },
+    { "code": "itc_unregistered", "returns": ["gstr3b"], "severity": "warning", "title": "GST from a supplier without a GSTIN" },
+    { "code": "purchase_draft", "returns": ["gstr3b"], "severity": "warning", "title": "Purchase draft dated in the month" },
+    { "code": "rule42", "returns": ["gstr3b"], "severity": "warning", "title": "Rule 42 reversal of common credit" },
+    { "code": "negative_itc", "returns": ["gstr3b"], "severity": "warning", "title": "More credit reversed than available" },
+    { "code": "gstr2b_missing", "returns": ["gstr3b"], "severity": "warning", "title": "GSTR-2B not imported" },
+    { "code": "gstr2b_review", "returns": ["gstr3b"], "severity": "warning", "title": "GSTR-2B rows still to review" }
+  ]
+}

@@ -336,6 +336,9 @@ pub struct PurchaseLineRecord {
     pub itc_reviewed_by: Option<String>,
     /// Used for both taxable and exempt supplies (rule 42), Phase 2.3.
     pub itc_common: bool,
+    /// `YYYY-MM` the ITC is claimed in when reviewed after the document's
+    /// GSTR-3B was filed (Phase 2.5). `None`: the document's month.
+    pub itc_period: Option<String>,
 }
 
 #[derive(Clone, Debug, FromRow, Serialize)]
@@ -678,4 +681,46 @@ pub struct Gstr2bDecisionRecord {
     pub note: Option<String>,
     pub decided_at: String,
     pub decided_by: Option<String>,
+}
+
+/// A return filed outside the app, recorded with its ARN (Phase 2.5).
+#[derive(Clone, Debug, FromRow, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GstFilingRecord {
+    pub id: String,
+    pub organisation_id: String,
+    pub gst_registration_id: String,
+    /// 'gstr1' or 'gstr3b'.
+    pub return_type: String,
+    pub period: String,
+    /// 'filed' or 'removed'.
+    pub status: String,
+    pub channel: String,
+    pub arn: String,
+    pub filed_on: String,
+    pub note: Option<String>,
+    pub return_pack_version: String,
+    pub rule_pack_version: String,
+    pub summary_json: String,
+    pub workpaper_sha256: String,
+    pub warning_count: i64,
+    pub recorded_at: String,
+    pub recorded_by: String,
+    pub removed_reason: Option<String>,
+    pub removed_at: Option<String>,
+    pub removed_by: Option<String>,
+}
+
+/// A file frozen with a filing; content in `attachment_blob`.
+#[derive(Clone, Debug, FromRow, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GstFilingFileRecord {
+    pub id: String,
+    pub filing_id: String,
+    /// 'portal_json', 'workpaper_json', 'workpaper_xlsx' or 'acknowledgement'.
+    pub kind: String,
+    pub file_name: String,
+    pub content_type: String,
+    pub size_bytes: i64,
+    pub sha256: String,
 }

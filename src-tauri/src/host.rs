@@ -426,6 +426,52 @@ pub async fn save_gstr2b_xlsx(
     Ok(Some(saved(&path, file.bytes.len())))
 }
 
+/// Asks where to save, then writes the filing pack (zip). `None` when cancelled.
+#[tauri::command]
+pub async fn save_filing_pack(
+    app: AppHandle,
+    core: State<'_, AppCore>,
+    files: State<'_, SavedFiles>,
+    registration_id: String,
+    period: String,
+    return_type: String,
+) -> CmdResult<Option<SavedFile>> {
+    let file = core
+        .filing_pack(&ctx(), &registration_id, &period, &return_type)
+        .await?;
+    save_zip(&app, &files, file).await
+}
+
+/// Asks where to save, then writes the compliance pack (zip) of a filed
+/// return. `None` when cancelled.
+#[tauri::command]
+pub async fn save_compliance_pack(
+    app: AppHandle,
+    core: State<'_, AppCore>,
+    files: State<'_, SavedFiles>,
+    registration_id: String,
+    period: String,
+    return_type: String,
+) -> CmdResult<Option<SavedFile>> {
+    let file = core
+        .compliance_pack(&ctx(), &registration_id, &period, &return_type)
+        .await?;
+    save_zip(&app, &files, file).await
+}
+
+async fn save_zip(
+    app: &AppHandle,
+    files: &SavedFiles,
+    file: av_application::gstr3b::WorkpaperFile,
+) -> CmdResult<Option<SavedFile>> {
+    let Some(path) = save_dialog(app, file.file_name.clone(), ("Zip archive", "zip")).await else {
+        return Ok(None);
+    };
+    write_file(&path, &file.bytes)?;
+    files.remember(&path);
+    Ok(Some(saved(&path, file.bytes.len())))
+}
+
 /// Asks where to save, then writes the import template (CSV with a BOM so
 /// Excel reads it as UTF-8). `None` when cancelled.
 #[tauri::command]
