@@ -56,7 +56,7 @@ async fn fresh_install_health_and_dashboard() {
     let core = core().await;
     let h = core.health().await.unwrap();
     assert!(!h.organisation_configured);
-    assert_eq!(h.schema_version, 10);
+    assert_eq!(h.schema_version, 11);
     let d = core
         .dashboard_summary(&ctx(), "2026-11-01", "2026-11-30")
         .await
@@ -3443,7 +3443,7 @@ async fn backup_restores_on_a_clean_install_and_checks_the_books() {
         .unwrap();
     assert!(backup.file_name.starts_with("Umang-") && backup.file_name.ends_with(".avbackup"));
     assert_eq!(backup.header.business_name, "Umang");
-    assert_eq!(backup.header.schema_version, 10);
+    assert_eq!(backup.header.schema_version, 11);
     let status = s
         .core
         .record_backup(&ctx(), &backup.file_name, &backup.bytes)
@@ -3977,4 +3977,254 @@ async fn gstr3b_workpaper_offset_and_rule_42() {
     let file = b.core.gstr3b_xlsx(&ctx(), &reg, "2026-11").await.unwrap();
     assert!(file.file_name.ends_with("_112026.xlsx"));
     assert_eq!(&file.bytes[..2], b"PK", "an xlsx is a zip");
+}
+
+#[tokio::test]
+async fn gstr2b_import_reconcile_and_decide() {
+    use crate::gstr2b::Gstr2bDecisionInput;
+    let b = books().await;
+    let record = |input: PurchaseDocumentInput| {
+        let core = &b.core;
+        async move {
+            core.record_purchase(&ctx(), None, input, None)
+                .await
+                .unwrap()
+        }
+    };
+    record(bill(
+        &b.supplier,
+        "S-1",
+        vec![pline(&b.purchases_acc, "50000", "18", Some("eligible"))],
+    ))
+    .await;
+    record(bill(
+        &b.supplier,
+        "S-2",
+        vec![pline(&b.purchases_acc, "10000", "18", None)],
+    ))
+    .await;
+    record(bill(
+        &b.supplier,
+        "S-3",
+        vec![pline(&b.purchases_acc, "20000", "18", Some("eligible"))],
+    ))
+    .await;
+    record(bill(
+        &b.supplier,
+        "S-4",
+        vec![pline(&b.purchases_acc, "1000", "18", Some("eligible"))],
+    ))
+    .await;
+
+    let centre = b.core.return_centre(&ctx(), None, None).await.unwrap();
+    let reg = centre.registration_id.clone().unwrap();
+    let before = b.core.gstr2b(&ctx(), &reg, "2026-11").await.unwrap();
+    assert!(before.statement.is_none());
+    assert_eq!(before.rows.len(), 4);
+    assert!(before.rows.iter().all(|r| r.status == "missing_in_2b"));
+    let gstin = before.gstin.clone();
+
+    let statement = |our: &str| {
+        format!(
+            r#"{{"data":{{"gstin":"{our}","rtnprd":"112026","version":"1.0","gendt":"14-12-2026","docdata":{{
+              "b2b":[{{"ctin":"{GSTIN_MH}","trdnm":"Steel Co","supfildt":"11-12-2026","supprd":"112026","inv":[
+                {{"inum":"S/1","dt":"05-11-2026","val":59000,"pos":"27","rev":"N","itcavl":"Y","txval":50000,"igst":0,"cgst":4500,"sgst":4500,"cess":0}},
+                {{"inum":"S-2","dt":"05-11-2026","val":11850,"pos":"27","rev":"N","itcavl":"Y","txval":10000,"igst":0,"cgst":950,"sgst":900,"cess":0}},
+                {{"inum":"INV-3","dt":"05-11-2026","val":23600,"pos":"27","rev":"N","itcavl":"Y","txval":20000,"igst":0,"cgst":1800,"sgst":1800,"cess":0}},
+                {{"inum":"X-9","dt":"20-11-2026","val":1180,"pos":"27","rev":"N","itcavl":"N","rsn":"P","txval":1000,"igst":0,"cgst":90,"sgst":90,"cess":0}},
+                {{"inum":"S-01","dt":"05-11-2026","val":59000,"pos":"27","rev":"N","itcavl":"Y","txval":50000,"igst":0,"cgst":4500,"sgst":4500,"cess":0}}
+              ]}}],
+              "impg":[{{"boenum":"1","txval":100,"igst":18}}]}}}}}}"#
+        )
+    };
+    // Another GSTIN's statement is refused.
+    let wrong = b
+        .core
+        .import_gstr2b(
+            &ctx(),
+            &reg,
+            "2b.json",
+            statement("29AAPFU0939F1ZX").as_bytes(),
+        )
+        .await;
+    assert!(matches!(wrong, Err(AppError::Invalid(_))), "{wrong:?}");
+    let excel = b.core.import_gstr2b(&ctx(), &reg, "2b.xlsx", b"PK").await;
+    assert!(matches!(excel, Err(AppError::Invalid(_))));
+
+    let imported = b
+        .core
+        .import_gstr2b(
+            &ctx(),
+            &reg,
+            "returns_112026_R2B.json",
+            statement(&gstin).as_bytes(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        (
+            imported.period.as_str(),
+            imported.document_count,
+            imported.replaced
+        ),
+        ("2026-11", 5, false)
+    );
+    assert_eq!(imported.skipped_summary.as_deref(), Some("IMPG 1"));
+
+    let v = b.core.gstr2b(&ctx(), &reg, "2026-11").await.unwrap();
+    let row = |status: &str| {
+        v.rows
+            .iter()
+            .filter(|r| r.status == status)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(row("exact").len(), 1);
+    assert_eq!(row("exact")[0].books.as_ref().unwrap().number, "S-1");
+    let mismatch = row("mismatch");
+    assert_eq!(mismatch.len(), 1);
+    assert_eq!(mismatch[0].differences.len(), 1);
+    assert_eq!(
+        (
+            mismatch[0].differences[0].field,
+            mismatch[0].differences[0].delta_paise
+        ),
+        ("cgst", Some(5_000))
+    );
+    assert_eq!(mismatch[0].books.as_ref().unwrap().itc_pending_lines, 1);
+    let likely = row("likely");
+    assert_eq!(likely.len(), 1);
+    assert_eq!(likely[0].books.as_ref().unwrap().number, "S-3");
+    assert_eq!(row("missing_in_books").len(), 1);
+    assert!(
+        !row("missing_in_books")[0]
+            .portal
+            .as_ref()
+            .unwrap()
+            .itc_available
+    );
+    assert_eq!(row("duplicate").len(), 1);
+    let missing = row("missing_in_2b");
+    assert_eq!(missing.len(), 1);
+    assert_eq!(missing[0].books.as_ref().unwrap().number, "S-4");
+    assert_eq!(v.needs_review, 5);
+    // ITC: 2B available = 9,000 + 1,850 + 3,600 (duplicate left out); books
+    // claim S-1 and S-3 (S-2 pending) and S-4 which isn't in 2B.
+    assert_eq!(v.itc.portal_available_paise, 900_000 + 185_000 + 360_000);
+    assert_eq!(v.itc.portal_not_available_paise, 18_000);
+    assert_eq!(v.itc.books_claimable_paise, 900_000 + 360_000 + 18_000);
+    assert_eq!(v.itc.books_claimed_not_in_2b_paise, 18_000);
+
+    // Accept the likely match and defer the purchase missing in 2B.
+    let likely_key = likely[0].key.clone();
+    let s4_key = missing[0].key.clone();
+    let decide = |key: &str, d: Option<&str>| Gstr2bDecisionInput {
+        row_key: key.into(),
+        decision: d.map(Into::into),
+        note: Some("checked with supplier".into()),
+    };
+    let v = b
+        .core
+        .decide_gstr2b(
+            &ctx(),
+            &reg,
+            "2026-11",
+            decide(&likely_key, Some("accepted")),
+        )
+        .await
+        .unwrap();
+    let v = {
+        let _ = v;
+        b.core
+            .decide_gstr2b(&ctx(), &reg, "2026-11", decide(&s4_key, Some("deferred")))
+            .await
+            .unwrap()
+    };
+    assert_eq!(v.needs_review, 3);
+    let exact_key = v
+        .rows
+        .iter()
+        .find(|r| r.status == "exact")
+        .unwrap()
+        .key
+        .clone();
+    assert!(
+        b.core
+            .decide_gstr2b(
+                &ctx(),
+                &reg,
+                "2026-11",
+                decide(&exact_key, Some("accepted"))
+            )
+            .await
+            .is_err()
+    );
+    assert!(
+        b.core
+            .decide_gstr2b(&ctx(), &reg, "2026-11", decide("2b:nope", Some("accepted")))
+            .await
+            .is_err()
+    );
+
+    // Importing again replaces the statement and keeps the decisions.
+    let again = b
+        .core
+        .import_gstr2b(
+            &ctx(),
+            &reg,
+            "returns_112026_R2B.json",
+            statement(&gstin).as_bytes(),
+        )
+        .await
+        .unwrap();
+    assert!(again.replaced);
+    let v = b.core.gstr2b(&ctx(), &reg, "2026-11").await.unwrap();
+    assert_eq!(v.needs_review, 3);
+    let l = v.rows.iter().find(|r| r.key == likely_key).unwrap();
+    assert_eq!(
+        (l.decision.as_deref(), l.note.as_deref()),
+        (Some("accepted"), Some("checked with supplier"))
+    );
+
+    // The deferred purchase is carried into December.
+    let dec = b.core.gstr2b(&ctx(), &reg, "2026-12").await.unwrap();
+    let carried = dec.rows.iter().find(|r| r.key == s4_key).unwrap();
+    assert!(carried.books.as_ref().unwrap().carried && carried.needs_review);
+    assert_eq!(
+        dec.rows.len(),
+        1,
+        "other November purchases stay in November"
+    );
+
+    // Clearing a decision brings the row back for review.
+    let v = b
+        .core
+        .decide_gstr2b(&ctx(), &reg, "2026-11", decide(&s4_key, None))
+        .await
+        .unwrap();
+    assert_eq!(v.needs_review, 4);
+
+    let centre = b
+        .core
+        .return_centre(&ctx(), Some(&reg), None)
+        .await
+        .unwrap();
+    let nov = centre
+        .periods
+        .iter()
+        .find(|p| p.period == "2026-11")
+        .unwrap();
+    assert!(nov.gstr2b_imported);
+    assert_eq!(nov.gstr2b_needs_review, 4);
+    let oct = centre
+        .periods
+        .iter()
+        .find(|p| p.period == "2026-10")
+        .unwrap();
+    assert!(!oct.gstr2b_imported && oct.gstr2b_needs_review == 0);
+
+    let file = b.core.gstr2b_xlsx(&ctx(), &reg, "2026-11").await.unwrap();
+    assert!(file.file_name.starts_with("GSTR2B_reconciliation_") && file.bytes.starts_with(b"PK"));
+    let audit = b.core.list_audit_events(&ctx(), 50).await.unwrap();
+    assert!(audit.iter().any(|e| e.action == "gstr2b.imported"));
+    assert!(audit.iter().any(|e| e.action == "gstr2b.decided"));
 }

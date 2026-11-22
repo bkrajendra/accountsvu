@@ -769,6 +769,40 @@ pub async fn gstr3b(
 }
 
 #[tauri::command]
+pub async fn gstr2b(
+    core: State<'_, AppCore>,
+    registration_id: String,
+    period: String,
+) -> CmdResult<av_application::gstr2b::Gstr2bView> {
+    Ok(core.gstr2b(&ctx(), &registration_id, &period).await?)
+}
+
+/// The file's bytes arrive as a JSON array; files are capped at 20 MB in core.
+#[tauri::command]
+pub async fn import_gstr2b(
+    core: State<'_, AppCore>,
+    registration_id: String,
+    file_name: String,
+    bytes: Vec<u8>,
+) -> CmdResult<av_application::gstr2b::Gstr2bImportResult> {
+    Ok(core
+        .import_gstr2b(&ctx(), &registration_id, &file_name, &bytes)
+        .await?)
+}
+
+#[tauri::command]
+pub async fn decide_gstr2b(
+    core: State<'_, AppCore>,
+    registration_id: String,
+    period: String,
+    input: av_application::gstr2b::Gstr2bDecisionInput,
+) -> CmdResult<av_application::gstr2b::Gstr2bView> {
+    Ok(core
+        .decide_gstr2b(&ctx(), &registration_id, &period, input)
+        .await?)
+}
+
+#[tauri::command]
 pub async fn books_control(core: State<'_, AppCore>) -> CmdResult<BooksControlView> {
     Ok(core.books_control(&ctx()).await?)
 }

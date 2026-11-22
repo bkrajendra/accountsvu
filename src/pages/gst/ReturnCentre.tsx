@@ -75,7 +75,7 @@ export function ReturnCentre() {
         title="GST returns"
         subtitle={
           <>
-            GSTR-1 and GSTR-3B by month for <span className="num font-medium text-fg">{reg.gstin}</span> · {reg.stateName}
+            GSTR-1, GSTR-3B and GSTR-2B by month for <span className="num font-medium text-fg">{reg.gstin}</span> · {reg.stateName}
           </>
         }
         actions={
@@ -138,6 +138,7 @@ export function ReturnCentre() {
               <th className="px-4 py-2 font-medium">Period</th>
               <th className="px-3 py-2 font-medium">GSTR-1</th>
               <th className="px-3 py-2 font-medium">GSTR-3B</th>
+              <th className="px-3 py-2 font-medium">GSTR-2B</th>
               <th className="px-3 py-2 text-right font-medium">Documents</th>
               <th className="px-3 py-2 text-right font-medium">Output tax</th>
               <th className="px-3 py-2 text-right font-medium">Net ITC</th>
@@ -151,7 +152,7 @@ export function ReturnCentre() {
             ))}
             {data.periods.length === 0 && (
               <tr>
-                <td colSpan={8} className="px-4 py-10 text-center text-muted">
+                <td colSpan={9} className="px-4 py-10 text-center text-muted">
                   No return periods in {data.financialYear} yet.
                 </td>
               </tr>
@@ -194,6 +195,18 @@ function PeriodRow({ p, reg }: { p: ReturnPeriod; reg: string }) {
       <td className="px-4 py-2.5 font-medium">{p.label}</td>
       {cell("gstr1", p.status, p.gstr1Due)}
       {cell("gstr3b", p.gstr3bStatus, p.gstr3bDue)}
+      <td className="px-3 py-2.5">
+        <Link to={`/gst/gstr2b/${p.period}?reg=${reg}`} onClick={(e) => e.stopPropagation()} className="group inline-flex items-center gap-1">
+          {!p.gstr2bImported ? (
+            <span className="text-[12.5px] text-muted">Not imported</span>
+          ) : p.gstr2bNeedsReview > 0 ? (
+            <Badge tone="warning">{p.gstr2bNeedsReview} to review</Badge>
+          ) : (
+            <Badge tone="success">Reconciled</Badge>
+          )}
+          <ChevronRight size={14} className="text-subtle group-hover:text-fg" />
+        </Link>
+      </td>
       <td className="num px-3 py-2.5 text-right">
         {p.documentCount}
         {p.draftCount > 0 && <span className="text-[12px] text-muted"> +{p.draftCount} draft</span>}

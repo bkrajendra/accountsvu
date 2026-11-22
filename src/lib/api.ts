@@ -1342,6 +1342,10 @@ export interface ReturnPeriod {
   netItcPaise: number;
   /** Proposed cash payment (table 6.1), reverse charge included. */
   cashPayablePaise: number;
+  /** A GSTR-2B statement has been imported for the month. */
+  gstr2bImported: boolean;
+  /** Reconciliation rows still needing a decision (0 until imported). */
+  gstr2bNeedsReview: number;
 }
 
 export interface ReturnCentre {
@@ -1503,6 +1507,112 @@ export interface Gstr3bItcLine {
   reverseCharge: boolean;
   tax: Heads;
   eligible: Heads;
+}
+
+// GSTR-2B reconciliation (Phase 2.4)
+
+export type ReconStatus = "exact" | "likely" | "mismatch" | "missing_in_2b" | "missing_in_books" | "duplicate";
+export type ReconDecision = "accepted" | "deferred";
+
+export interface ReconAmounts {
+  taxablePaise: number;
+  igstPaise: number;
+  cgstPaise: number;
+  sgstPaise: number;
+  cessPaise: number;
+  taxPaise: number;
+}
+
+export interface ReconBookSide {
+  purchaseId: string;
+  docType: "bill" | "expense" | "debit_note";
+  number: string;
+  date: string;
+  amounts: ReconAmounts;
+  itcPendingLines: number;
+  itcClaimablePaise: number;
+  carried: boolean;
+}
+
+export interface ReconPortalSide {
+  section: string;
+  number: string;
+  date: string;
+  valuePaise: number;
+  amounts: ReconAmounts;
+  itcAvailable: boolean;
+  itcReason: string | null;
+  reverseCharge: boolean;
+  supplierFiledOn: string | null;
+  supplierPeriod: string | null;
+}
+
+export interface ReconDifference {
+  field: "number" | "date" | "taxable" | "igst" | "cgst" | "sgst" | "cess";
+  books: string;
+  portal: string;
+  deltaPaise: number | null;
+}
+
+export interface ReconRow {
+  key: string;
+  status: ReconStatus;
+  decision: ReconDecision | null;
+  note: string | null;
+  needsReview: boolean;
+  supplierGstin: string;
+  supplierName: string;
+  kind: "invoice" | "credit_note" | "debit_note";
+  books: ReconBookSide | null;
+  portal: ReconPortalSide | null;
+  differences: ReconDifference[];
+  foundIn: string | null;
+}
+
+export interface ReconStatusSummary {
+  status: ReconStatus;
+  label: string;
+  count: number;
+  needsReview: number;
+  books: ReconAmounts;
+  portal: ReconAmounts;
+}
+
+export interface Gstr2b {
+  registrationId: string;
+  gstin: string;
+  period: string;
+  label: string;
+  statement: {
+    fileName: string;
+    importedAt: string;
+    generatedOn: string | null;
+    documentCount: number;
+    skippedSummary: string | null;
+  } | null;
+  rows: ReconRow[];
+  summary: ReconStatusSummary[];
+  needsReview: number;
+  itc: {
+    portalAvailablePaise: number;
+    portalNotAvailablePaise: number;
+    booksClaimablePaise: number;
+    booksClaimedNotIn2bPaise: number;
+  };
+  tolerancePaise: number;
+}
+
+export interface Gstr2bImportResult {
+  period: string;
+  documentCount: number;
+  skippedSummary: string | null;
+  replaced: boolean;
+}
+
+export interface Gstr2bDecisionInput {
+  rowKey: string;
+  decision: ReconDecision | null;
+  note?: string | null;
 }
 
 export interface Gstr3b {
@@ -1679,6 +1789,12 @@ export const api = {
   /** Asks where to save the portal JSON; null when cancelled (desktop only). */
   saveGstr1Json: (registrationId: string, period: string) => call<SavedFile | null>("save_gstr1_json", { registrationId, period }),
   gstr3b: (registrationId: string, period: string) => call<Gstr3b>("gstr3b", { registrationId, period }),
+  gstr2b: (registrationId: string, period: string) => call<Gstr2b>("gstr2b", { registrationId, period }),
+  importGstr2b: (registrationId: string, fileName: string, bytes: Uint8Array) =>
+    call<Gstr2bImportResult>("import_gstr2b", { registrationId, fileName, bytes: Array.from(bytes) }),
+  decideGstr2b: (registrationId: string, period: string, input: Gstr2bDecisionInput) =>
+    call<Gstr2b>("decide_gstr2b", { registrationId, period, input }),
+  saveGstr2bXlsx: (registrationId: string, period: string) => call<SavedFile | null>("save_gstr2b_xlsx", { registrationId, period }),
   /** Asks where to save the Excel workpaper; null when cancelled (desktop only). */
   saveGstr3bXlsx: (registrationId: string, period: string) => call<SavedFile | null>("save_gstr3b_xlsx", { registrationId, period }),
   saveImportTemplate: (kind: ImportKind) => call<SavedFile | null>("save_import_template", { kind }),

@@ -6,6 +6,16 @@
  */
 import type {
   Gstr1,
+  Gstr2b,
+  Gstr2bDecisionInput,
+  Gstr2bImportResult,
+  ReconAmounts,
+  ReconBookSide,
+  ReconDecision,
+  ReconDifference,
+  ReconPortalSide,
+  ReconRow,
+  ReconStatus,
   Gstr3b,
   Gstr3bRow,
   HeadPayment,
@@ -1017,6 +1027,235 @@ function previewGstr3b(regId: string, period: string): Gstr3b {
   }
 }
 
+// --- GSTR-2B (Phase 2.4): a small mirror of the Rust reconciliation, for the browser preview ---
+
+type Recon2bLine = { section: string; gstin: string; name: string; kind: ReconRow["kind"]; number: string; date: string; value: number; a: ReconAmounts; pos: string | null; rev: boolean; itc: boolean; rsn: string | null; filed: string | null; supPeriod: string | null };
+const recon2b = new Map<string, { fileName: string; importedAt: string; generatedOn: string | null; skipped: string | null; lines: Recon2bLine[] }>();
+const recon2bDecisions = new Map<string, { decision: ReconDecision; note: string | null; purchaseId: string | null }>();
+
+const normNo = (n: string) =>
+  (n.toUpperCase().match(/[A-Z]+|[0-9]+/g) ?? []).map((r) => (/^[0-9]+$/.test(r) ? r.replace(/^0+(?=.)/, "") : r)).join("");
+const tailDigits = (n: string) => ((n.match(/[0-9]+/g) ?? []).pop() ?? "").replace(/^0+(?=.)/, "");
+const amt = (taxable: number, igst: number, cgst: number, sgst: number, cess: number): ReconAmounts => ({ taxablePaise: taxable, igstPaise: igst, cgstPaise: cgst, sgstPaise: sgst, cessPaise: cess, taxPaise: igst + cgst + sgst + cess });
+const r2bPaise = (v: unknown) => {
+  const m = String(v ?? 0).trim().match(/^(-?)(\d*)(?:\.(\d*))?$/);
+  if (!m) throw { code: "invalid_input", message: `${String(v)} isn't an amount`, fields: [] } satisfies Fail;
+  const f = (m[3] ?? "").padEnd(3, "0");
+  const p = Number(m[2] || "0") * 100 + Number(f.slice(0, 2)) + (Number(f[2]) >= 5 ? 1 : 0);
+  return m[1] ? -p : p;
+};
+const dmy = (d: string) => {
+  const [dd, mm, yy] = d.split(/[-/]/);
+  return `${yy}-${mm.padStart(2, "0")}-${dd.padStart(2, "0")}`;
+};
+const mmyyyy = (p: string) => `${p.slice(2)}-${p.slice(0, 2)}`;
+
+function previewImportGstr2b(regId: string, fileName: string, bytes: number[]): Gstr2bImportResult {
+  const fail = (message: string) => ({ code: "invalid_input", message, fields: [] }) satisfies Fail;
+  const reg = regs.find((r) => r.id === regId);
+  if (!reg) throw { code: "not_found", message: "That GST registration wasn't found.", fields: [] } satisfies Fail;
+  if (/\.(xlsx?|zip)$/i.test(fileName)) throw fail("choose the JSON download of GSTR-2B (Excel and ZIP files aren't read yet; unzip the download first)");
+  let root: Record<string, unknown>;
+  try {
+    root = JSON.parse(new TextDecoder().decode(new Uint8Array(bytes)).replace(/^﻿/, ""));
+  } catch {
+    throw fail("this isn't a GSTR-2B JSON file: not valid JSON");
+  }
+  const data = (root.data ?? root) as Record<string, unknown>;
+  const gstin = String(data.gstin ?? "").toUpperCase();
+  const rtn = String(data.rtnprd ?? "");
+  const docdata = data.docdata as Record<string, unknown> | undefined;
+  if (!gstin || !/^\d{6}$/.test(rtn) || !docdata) throw fail("this isn't a GSTR-2B JSON file");
+  if (gstin !== reg.gstin.toUpperCase()) throw fail(`this GSTR-2B is for ${gstin}, not ${reg.gstin}`);
+  const lines: Recon2bLine[] = [];
+  const skipped: string[] = [];
+  for (const [section, key] of [["b2b", "inv"], ["b2ba", "inv"], ["cdnr", "nt"], ["cdnra", "nt"]] as const) {
+    for (const s of (docdata[section] as Record<string, unknown>[] | undefined) ?? []) {
+      for (const d of (s[key] as Record<string, unknown>[] | undefined) ?? []) {
+        const notes = section.startsWith("cdn");
+        const items = (d.items as Record<string, unknown>[] | undefined) ?? [];
+        const head = (k: string) => (k in d ? r2bPaise(d[k]) : items.reduce((a, it) => a + r2bPaise(it[k]), 0));
+        lines.push({
+          section, gstin: String(s.ctin ?? "").toUpperCase(), name: String(s.trdnm ?? ""),
+          kind: notes ? (d.typ === "D" ? "debit_note" : "credit_note") : "invoice",
+          number: String(d[notes ? "ntnum" : "inum"] ?? ""), date: dmy(String(d.dt ?? "")), value: r2bPaise(d.val),
+          a: amt(head("txval"), head("igst"), head("cgst"), head("sgst"), head("cess")),
+          pos: d.pos ? String(d.pos) : null, rev: d.rev === "Y", itc: d.itcavl !== "N", rsn: d.rsn ? String(d.rsn) : null,
+          filed: s.supfildt ? dmy(String(s.supfildt)) : null, supPeriod: s.supprd ? mmyyyy(String(s.supprd)) : null,
+        });
+      }
+    }
+  }
+  for (const [k, v] of Object.entries(docdata)) if (!["b2b", "b2ba", "cdnr", "cdnra"].includes(k) && Array.isArray(v) && v.length) skipped.push(`${k.toUpperCase()} ${v.length}`);
+  const period = mmyyyy(rtn);
+  const replaced = recon2b.has(`${regId}|${period}`);
+  recon2b.set(`${regId}|${period}`, { fileName, importedAt: new Date().toISOString(), generatedOn: data.gendt ? dmy(String(data.gendt)) : null, skipped: skipped.join(", ") || null, lines });
+  return { period, documentCount: lines.length, skippedSummary: skipped.join(", ") || null, replaced };
+}
+
+function previewGstr2b(regId: string, period: string): Gstr2b {
+  const reg = regs.find((r) => r.id === regId);
+  if (!reg) throw { code: "not_found", message: "That GST registration wasn't found.", fields: [] } satisfies Fail;
+  const first = `${period}-01`;
+  const last = monthEnd(period);
+  const st = recon2b.get(`${regId}|${period}`);
+  const lines = st?.lines ?? [];
+  const key2b = (gstin: string, kind: string, number: string) => `2b:${gstin}|${kind}|${normNo(number)}`;
+  const elsewhere = new Map<string, string>();
+  for (const [k, s] of recon2b)
+    if (k.startsWith(`${regId}|`) && !k.endsWith(`|${period}`))
+      for (const l of s.lines) if (!elsewhere.has(key2b(l.gstin, l.kind, l.number))) elsewhere.set(key2b(l.gstin, l.kind, l.number), k.split("|")[1]);
+  const decided = (key: string) => recon2bDecisions.get(`${regId}|${period}|${key}`);
+  const deferredBefore = (key: string) =>
+    [...recon2bDecisions.entries()].some(([k, d]) => k.startsWith(`${regId}|`) && k.split("|")[1] < period && k.endsWith(`|${key}`) && d.decision === "deferred");
+
+  type Book = { side: ReconBookSide; gstin: string; kind: ReconRow["kind"]; name: string };
+  const books: Book[] = [];
+  const foundIn: { b: Book; at: string }[] = [];
+  for (const d of purchaseDocs) {
+    if (d.status !== "recorded" || !d.partyGstin || (d.gstRegistrationId ?? regs[0]?.id) !== regId) continue;
+    const kind = d.docType === "debit_note" ? "credit_note" : "invoice";
+    const number = (d.docType === "debit_note" ? d.number : (d.supplierInvoiceNumber ?? d.number)) ?? "";
+    if (!number) continue;
+    const date = d.supplierInvoiceDate ?? d.docDate;
+    if (date > last) continue;
+    let pendingLines = 0;
+    let claim = 0;
+    for (const l of d.lines) {
+      const t = hSum(lineHeads(l));
+      if (!t) continue;
+      if (l.itcStatus === "pending") pendingLines++;
+      else if (l.itcStatus === "eligible") claim += t;
+      else if (l.itcStatus === "partial") claim += l.itcEligiblePaise;
+    }
+    const b: Book = {
+      gstin: d.partyGstin.toUpperCase(),
+      kind,
+      name: d.partyName ?? "",
+      side: {
+        purchaseId: d.id, docType: d.docType as ReconBookSide["docType"], number, date,
+        amounts: amt(d.taxablePaise, d.igstPaise, d.cgstPaise, d.sgstPaise + d.utgstPaise, d.cessPaise),
+        itcPendingLines: pendingLines, itcClaimablePaise: claim, carried: date < first,
+      },
+    };
+    const at = elsewhere.get(key2b(b.gstin, kind, number));
+    if (at) {
+      if (date >= first) foundIn.push({ b, at });
+      continue;
+    }
+    books.push(b);
+  }
+  const used = new Set<number>();
+  const done = new Set<number>();
+  const rows: ReconRow[] = [];
+  const agree = (x: ReconAmounts, y: ReconAmounts) => (["taxablePaise", "igstPaise", "cgstPaise", "sgstPaise", "cessPaise"] as const).every((k) => Math.abs(x[k] - y[k]) <= 100);
+  const diffs = (b: Book, l: Recon2bLine): ReconDifference[] => {
+    const out: ReconDifference[] = [];
+    if (normNo(b.side.number) !== normNo(l.number)) out.push({ field: "number", books: b.side.number, portal: l.number, deltaPaise: null });
+    if (b.side.date !== l.date) out.push({ field: "date", books: b.side.date, portal: l.date, deltaPaise: null });
+    for (const [f, k] of [["taxable", "taxablePaise"], ["igst", "igstPaise"], ["cgst", "cgstPaise"], ["sgst", "sgstPaise"], ["cess", "cessPaise"]] as const)
+      if (Math.abs(l.a[k] - b.side.amounts[k]) > 100) out.push({ field: f, books: String(b.side.amounts[k]), portal: String(l.a[k]), deltaPaise: l.a[k] - b.side.amounts[k] });
+    return out;
+  };
+  const portalSide = (l: Recon2bLine): ReconPortalSide => ({
+    section: l.section, number: l.number, date: l.date, valuePaise: l.value, amounts: l.a,
+    itcAvailable: l.itc, itcReason: l.rsn, reverseCharge: l.rev, supplierFiledOn: l.filed, supplierPeriod: l.supPeriod,
+  });
+  const push = (key: string, status: ReconStatus, gstin: string, name: string, kind: ReconRow["kind"], b: Book | null, l: Recon2bLine | null, differences: ReconDifference[] = [], found: string | null = null) => {
+    const d = found ? undefined : decided(key);
+    const ok = d && b && d.purchaseId && d.purchaseId !== b.side.purchaseId ? undefined : d;
+    rows.push({
+      key, status, decision: ok?.decision ?? null, note: ok?.note ?? null, needsReview: !found && status !== "exact" && !ok,
+      supplierGstin: gstin, supplierName: name, kind, books: b?.side ?? null, portal: l ? portalSide(l) : null, differences, foundIn: found,
+    });
+  };
+  lines.forEach((l, i) => {
+    const firstAt = lines.findIndex((x) => x.gstin === l.gstin && x.kind === l.kind && normNo(x.number) === normNo(l.number));
+    if (firstAt < i) {
+      done.add(i);
+      push(`${key2b(l.gstin, l.kind, l.number)}#${i + 1}`, "duplicate", l.gstin, l.name, l.kind, null, l);
+    }
+  });
+  lines.forEach((l, i) => {
+    if (done.has(i)) return;
+    const bi = books.findIndex((b, j) => !used.has(j) && b.gstin === l.gstin && b.kind === l.kind && normNo(b.side.number) === normNo(l.number));
+    if (bi < 0) return;
+    used.add(bi);
+    done.add(i);
+    const d = diffs(books[bi], l);
+    push(key2b(l.gstin, l.kind, l.number), d.length ? "mismatch" : "exact", l.gstin, l.name || books[bi].name, l.kind, books[bi], l, d);
+  });
+  lines.forEach((l, i) => {
+    if (done.has(i)) return;
+    const bi = books.findIndex(
+      (b, j) => !used.has(j) && b.gstin === l.gstin && b.kind === l.kind && agree(b.side.amounts, l.a) && (b.side.date === l.date || (!!tailDigits(l.number) && tailDigits(b.side.number) === tailDigits(l.number))),
+    );
+    if (bi < 0) return;
+    used.add(bi);
+    done.add(i);
+    push(key2b(l.gstin, l.kind, l.number), "likely", l.gstin, l.name || books[bi].name, l.kind, books[bi], l, diffs(books[bi], l));
+  });
+  lines.forEach((l, i) => {
+    if (!done.has(i)) push(key2b(l.gstin, l.kind, l.number), "missing_in_books", l.gstin, l.name, l.kind, null, l);
+  });
+  books.forEach((b, j) => {
+    if (used.has(j)) return;
+    if (b.side.carried && !deferredBefore(`book:${b.side.purchaseId}`)) return;
+    push(`book:${b.side.purchaseId}`, "missing_in_2b", b.gstin, b.name, b.kind, b, null);
+  });
+  for (const f of foundIn) push(`book:${f.b.side.purchaseId}`, "missing_in_2b", f.b.gstin, f.b.name, f.b.kind, f.b, null, [], f.at);
+  const dateOf = (r: ReconRow) => r.portal?.date ?? r.books?.date ?? "";
+  rows.sort((a, b) => a.supplierName.toLowerCase().localeCompare(b.supplierName.toLowerCase()) || dateOf(a).localeCompare(dateOf(b)));
+
+  const labels: [ReconStatus, string][] = [
+    ["exact", "Exact match"], ["likely", "Likely match"], ["mismatch", "Mismatch"],
+    ["missing_in_2b", "Missing in 2B"], ["missing_in_books", "Missing in books"], ["duplicate", "Duplicate in 2B"],
+  ];
+  const zero = () => amt(0, 0, 0, 0, 0);
+  const addA = (t: ReconAmounts, a: ReconAmounts, s: number) => (Object.keys(t) as (keyof ReconAmounts)[]).forEach((k) => (t[k] += s * a[k]));
+  const summary = labels.map(([status, label]) => ({ status, label, count: 0, needsReview: 0, books: zero(), portal: zero() }));
+  const itc = { portalAvailablePaise: 0, portalNotAvailablePaise: 0, booksClaimablePaise: 0, booksClaimedNotIn2bPaise: 0 };
+  for (const r of rows) {
+    const s = r.kind === "credit_note" ? -1 : 1;
+    const x = summary.find((y) => y.status === r.status)!;
+    x.count++;
+    x.needsReview += r.needsReview ? 1 : 0;
+    if (r.books) addA(x.books, r.books.amounts, s);
+    if (r.portal) addA(x.portal, r.portal.amounts, s);
+    if (r.status === "duplicate" || r.foundIn) continue;
+    if (r.portal) itc[r.portal.itcAvailable ? "portalAvailablePaise" : "portalNotAvailablePaise"] += s * r.portal.amounts.taxPaise;
+    if (r.books) {
+      itc.booksClaimablePaise += s * r.books.itcClaimablePaise;
+      if (!r.portal) itc.booksClaimedNotIn2bPaise += s * r.books.itcClaimablePaise;
+    }
+  }
+  return {
+    registrationId: regId,
+    gstin: reg.gstin,
+    period,
+    label: periodLabel(period),
+    statement: st ? { fileName: st.fileName, importedAt: st.importedAt, generatedOn: st.generatedOn, documentCount: st.lines.length, skippedSummary: st.skipped } : null,
+    rows,
+    summary,
+    needsReview: rows.filter((r) => r.needsReview).length,
+    itc,
+    tolerancePaise: 100,
+  };
+}
+
+function previewDecideGstr2b(regId: string, period: string, input: Gstr2bDecisionInput): Gstr2b {
+  const v = previewGstr2b(regId, period);
+  const row = v.rows.find((r) => r.key === input.rowKey && !r.foundIn);
+  if (!row) throw { code: "not_found", message: "That reconciliation row wasn't found.", fields: [] } satisfies Fail;
+  const k = `${regId}|${period}|${row.key}`;
+  if (!input.decision) recon2bDecisions.delete(k);
+  else {
+    if (row.status === "exact") throw { code: "invalid_input", message: "an exact match needs no decision", fields: [] } satisfies Fail;
+    recon2bDecisions.set(k, { decision: input.decision, note: input.note ?? null, purchaseId: row.books?.purchaseId ?? null });
+  }
+  return previewGstr2b(regId, period);
+}
+
 function previewReturnCentre(regId: string | null, fyCode: string | null): ReturnCentre {
   const active = regs.filter((r) => r.registrationType !== "composition");
   const reg = active.find((r) => r.id === regId) ?? active.find((r) => r.status === "active") ?? active[0] ?? null;
@@ -1049,6 +1288,8 @@ function previewReturnCentre(regId: string | null, fyCode: string | null): Retur
         gstr3bStatus: three.status,
         netItcPaise: hSum(three.itcNet),
         cashPayablePaise: three.offset.cashTotal,
+        gstr2bImported: recon2b.has(`${reg.id}|${p}`),
+        gstr2bNeedsReview: recon2b.has(`${reg.id}|${p}`) ? previewGstr2b(reg.id, p).needsReview : 0,
       });
     }
   }
@@ -2153,6 +2394,14 @@ function reportCommand(command: string, args: Record<string, any>): unknown {
       return previewReturnCentre(args.registrationId ?? null, args.financialYear ?? null);
     case "gstr1":
       return previewWorkpaper(args.registrationId, args.period);
+    case "gstr2b":
+      return previewGstr2b(args.registrationId, args.period);
+    case "import_gstr2b":
+      return previewImportGstr2b(args.registrationId, args.fileName, args.bytes);
+    case "decide_gstr2b":
+      return previewDecideGstr2b(args.registrationId, args.period, args.input);
+    case "save_gstr2b_xlsx":
+      throw { code: "invalid_input", message: "Saving the Excel report runs in the desktop app.", fields: [] } satisfies Fail;
     case "gstr3b":
       return previewGstr3b(args.registrationId, args.period);
     case "save_gstr3b_xlsx":
@@ -2357,7 +2606,7 @@ function hostCommand(command: string, args: Record<string, any>): unknown {
       throw { code: "invalid_input", message: "The browser preview can't restart. Restoring runs in the desktop app.", fields: [] } satisfies Fail;
     case "check_update":
       return {
-        currentVersion: "0.2.4",
+        currentVersion: "0.2.5",
         version: "0.3.0",
         date: new Date(Date.now() - 86_400_000).toISOString(),
         notes: "AccountsVU 0.3.0 — sample release notes from the browser preview.",
@@ -2381,7 +2630,7 @@ export async function previewBackend(command: string, args: Record<string, any> 
   if (hosted !== undefined) return hosted;
   switch (command) {
     case "app_health":
-      return { appVersion: "0.2.4", schemaVersion: 10, database: "(browser preview — in memory)", organisationConfigured: !!org };
+      return { appVersion: "0.2.5", schemaVersion: 11, database: "(browser preview — in memory)", organisationConfigured: !!org };
     case "dashboard_summary":
       return {
         salesThisMonth: "0", purchasesThisMonth: "0",

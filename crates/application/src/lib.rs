@@ -9,6 +9,7 @@ mod context;
 pub mod crypto;
 pub mod documents;
 mod error;
+pub mod gstr2b;
 pub mod gstr3b;
 pub mod import;
 pub mod masters;

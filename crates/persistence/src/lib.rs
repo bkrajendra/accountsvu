@@ -10,9 +10,9 @@ pub mod repo;
 pub mod sqlite;
 
 pub use repo::{
-    AccountRepo, AttachmentRepo, AuditRepo, BackupRepo, BankingRepo, DbResult, ItemRepo,
-    JournalRepo, LedgerQueries, OrganisationRepo, PartyRepo, PurchaseRepo, RegistrationRepo,
-    ReportRepo, SalesRepo, SeriesRepo, Store, UnitOfWork,
+    AccountRepo, AttachmentRepo, AuditRepo, BackupRepo, BankingRepo, DbResult, Gstr2bRepo,
+    ItemRepo, JournalRepo, LedgerQueries, OrganisationRepo, PartyRepo, PurchaseRepo,
+    RegistrationRepo, ReportRepo, SalesRepo, SeriesRepo, Store, UnitOfWork,
 };
 pub use sqlite::SqliteStore;
 

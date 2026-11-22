@@ -93,6 +93,10 @@ pub struct PeriodSummary {
     pub net_itc_paise: i64,
     /// Proposed cash payment (6.1), reverse charge included.
     pub cash_payable_paise: i64,
+    /// A GSTR-2B statement has been imported for the month.
+    pub gstr2b_imported: bool,
+    /// Reconciliation rows still needing a decision (0 until imported).
+    pub gstr2b_needs_review: usize,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1160,11 +1164,17 @@ impl<S: Store> AppCore<S> {
             let purchases = self.load_return_purchases(&mut uow, &org.id).await?;
             let chain = Self::chain_start(&org.books_start_date, first.first());
             let series = crate::gstr3b::build_3b_series(reg, &docs, &purchases, chain, last, today);
+            let recon = self.load_recon_data(&mut uow, &org.id, reg).await?;
             let mut p = first;
             while p.first() <= last.first() && p.first() <= fy.end_date() {
                 let built = build(reg, &docs, p, today);
                 let v = built.view;
                 let three_b = series.iter().find(|x| x.period == v.period);
+                let two_b = recon
+                    .statements
+                    .iter()
+                    .any(|(s, _)| s.period == v.period)
+                    .then(|| crate::gstr2b::reconcile_period(&recon, p));
                 let in_period = docs.iter().filter(|(d, _)| {
                     d.gst_registration_id.as_deref() == Some(reg.id.as_str())
                         && d.doc_date >= v.from
@@ -1202,6 +1212,9 @@ impl<S: Store> AppCore<S> {
                     gstr3b_status: p.status_by(today, p.gstr3b_due()),
                     net_itc_paise: three_b.map_or(0, |x| x.itc_net.total()),
                     cash_payable_paise: three_b.map_or(0, |x| x.offset.cash_total),
+                    gstr2b_imported: two_b.is_some(),
+                    gstr2b_needs_review: two_b
+                        .map_or(0, |r| r.rows.iter().filter(|r| r.needs_review).count()),
                 });
                 p = p.next();
             }

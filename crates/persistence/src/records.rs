@@ -614,3 +614,68 @@ impl DatabaseCheck {
         self.integrity == "ok" && self.foreign_key_problems == 0 && self.unbalanced_entries == 0
     }
 }
+
+/// An imported GSTR-2B statement (Phase 2.4), one per GSTIN and month.
+#[derive(Clone, Debug, FromRow, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Gstr2bStatementRecord {
+    pub id: String,
+    pub organisation_id: String,
+    pub gst_registration_id: String,
+    /// `YYYY-MM`.
+    pub period: String,
+    pub gstin: String,
+    pub generated_on: Option<String>,
+    pub format_version: Option<String>,
+    pub adapter_version: String,
+    pub file_name: String,
+    pub sha256: String,
+    pub skipped_summary: Option<String>,
+    pub imported_at: String,
+    pub imported_by: Option<String>,
+}
+
+/// One supplier document from a GSTR-2B statement.
+#[derive(Clone, Debug, FromRow, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Gstr2bLineRecord {
+    pub id: String,
+    pub statement_id: String,
+    pub line_no: i64,
+    pub section: String,
+    pub supplier_gstin: String,
+    pub supplier_name: String,
+    pub doc_kind: String,
+    pub doc_number: String,
+    pub doc_date: String,
+    pub value_paise: i64,
+    pub taxable_paise: i64,
+    pub igst_paise: i64,
+    pub cgst_paise: i64,
+    pub sgst_paise: i64,
+    pub cess_paise: i64,
+    pub place_of_supply: Option<String>,
+    pub reverse_charge: bool,
+    pub itc_available: bool,
+    pub itc_reason: Option<String>,
+    pub supplier_filed_on: Option<String>,
+    pub supplier_period: Option<String>,
+    pub original_number: Option<String>,
+}
+
+/// A reviewer's decision on a reconciliation row.
+#[derive(Clone, Debug, FromRow, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Gstr2bDecisionRecord {
+    pub id: String,
+    pub organisation_id: String,
+    pub gst_registration_id: String,
+    pub period: String,
+    pub row_key: String,
+    pub purchase_id: Option<String>,
+    /// 'accepted' or 'deferred'.
+    pub decision: String,
+    pub note: Option<String>,
+    pub decided_at: String,
+    pub decided_by: Option<String>,
+}

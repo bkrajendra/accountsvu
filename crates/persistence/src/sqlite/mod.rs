@@ -642,6 +642,7 @@ impl LedgerQueries for SqliteUow {
 
 mod backup;
 mod banking;
+mod gstr2b;
 mod masters;
 mod purchases;
 mod reports;

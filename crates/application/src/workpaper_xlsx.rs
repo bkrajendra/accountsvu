@@ -319,3 +319,243 @@ pub fn gstr3b_workbook(v: &Gstr3bView) -> Result<Vec<u8>, XlsxError> {
 
     wb.save_to_buffer()
 }
+
+fn status_label(status: &str) -> &'static str {
+    match status {
+        "exact" => "Exact match",
+        "likely" => "Likely match",
+        "mismatch" => "Mismatch",
+        "missing_in_2b" => "Missing in 2B",
+        "missing_in_books" => "Missing in books",
+        "duplicate" => "Duplicate in 2B",
+        _ => "",
+    }
+}
+
+fn kind_label(kind: &str) -> &'static str {
+    match kind {
+        "credit_note" => "Credit note",
+        "debit_note" => "Debit note",
+        _ => "Invoice",
+    }
+}
+
+/// GSTR-2B reconciliation: summary, every row side by side, and the
+/// purchase register of the month with its 2B status.
+pub fn gstr2b_workbook(v: &crate::gstr2b::Gstr2bView) -> Result<Vec<u8>, XlsxError> {
+    let mut wb = Workbook::new();
+    {
+        let ws = wb.add_worksheet().set_name("Summary")?;
+        ws.set_column_width(0, 34)?;
+        for c in 1..=7 {
+            ws.set_column_width(c, 16)?;
+        }
+        let mut s = Sheet::new(ws);
+        s.title(&format!(
+            "GSTR-2B reconciliation — {} — {}",
+            v.gstin, v.label
+        ))?;
+        match &v.statement {
+            Some(st) => s.note(&format!(
+                "Statement: {} ({} documents), imported {}",
+                st.file_name, st.document_count, st.imported_at
+            ))?,
+            None => s.note(
+                "No GSTR-2B imported for this month: every purchase shows as missing in 2B.",
+            )?,
+        }
+        if let Some(sk) = v
+            .statement
+            .as_ref()
+            .and_then(|s| s.skipped_summary.as_ref())
+        {
+            s.note(&format!("Not reconciled (ISD, imports): {sk}"))?;
+        }
+        s.note(&format!(
+            "Amounts within ₹{} are treated as equal. Credit notes reduce totals. A match does not claim ITC: each purchase line's ITC review decides that.",
+            v.tolerance_paise / 100
+        ))?;
+        s.section("By status")?;
+        s.header(&[
+            "Status",
+            "Documents",
+            "To review",
+            "Books taxable",
+            "Books tax",
+            "2B taxable",
+            "2B tax",
+        ])?;
+        for r in &v.summary {
+            s.ws.write_string(s.row, 0, r.label)?;
+            s.ws.write_number(s.row, 1, r.count as f64)?;
+            s.ws.write_number(s.row, 2, r.needs_review as f64)?;
+            for (i, a) in [
+                r.books.taxable_paise,
+                r.books.tax_paise,
+                r.portal.taxable_paise,
+                r.portal.tax_paise,
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                s.ws.write_number_with_format(s.row, col(3 + i), rupees(a), &s.money)?;
+            }
+            s.row += 1;
+        }
+        s.section("Input tax credit")?;
+        s.line("ITC available in 2B", &[v.itc.portal_available_paise])?;
+        s.line(
+            "ITC not available in 2B",
+            &[v.itc.portal_not_available_paise],
+        )?;
+        s.line(
+            "ITC claimable in books (after review)",
+            &[v.itc.books_claimable_paise],
+        )?;
+        s.line(
+            "…of which on documents not in this 2B",
+            &[v.itc.books_claimed_not_in_2b_paise],
+        )?;
+    }
+    {
+        let ws = wb.add_worksheet().set_name("Reconciliation")?;
+        ws.set_column_width(0, 18)?;
+        ws.set_column_width(1, 30)?;
+        ws.set_column_width(2, 18)?;
+        for c in 3..=22 {
+            ws.set_column_width(c, 14)?;
+        }
+        let mut s = Sheet::new(ws);
+        s.header(&[
+            "Status",
+            "Supplier",
+            "GSTIN",
+            "Kind",
+            "Books no.",
+            "Books date",
+            "2B no.",
+            "2B date",
+            "Decision",
+            "Note",
+            "Differences",
+            "ITC in 2B",
+            "Books taxable",
+            "Books IGST",
+            "Books CGST",
+            "Books SGST",
+            "Books cess",
+            "2B taxable",
+            "2B IGST",
+            "2B CGST",
+            "2B SGST",
+            "2B cess",
+        ])?;
+        for r in &v.rows {
+            let b = r.books.as_ref();
+            let p = r.portal.as_ref();
+            let diffs = r
+                .differences
+                .iter()
+                .map(|d| d.field)
+                .collect::<Vec<_>>()
+                .join(", ");
+            let status = match &r.found_in {
+                Some(m) => format!("In 2B for {m}"),
+                None => status_label(r.status).to_string(),
+            };
+            let itc = match p {
+                Some(p) if p.itc_available => "Yes".to_string(),
+                Some(p) => format!("No {}", p.itc_reason.clone().unwrap_or_default()),
+                None => String::new(),
+            };
+            let zero = crate::gstr2b::Amounts::default();
+            let ba = b.map_or(&zero, |b| &b.amounts);
+            let pa = p.map_or(&zero, |p| &p.amounts);
+            s.mixed(
+                &[
+                    &status,
+                    &r.supplier_name,
+                    &r.supplier_gstin,
+                    kind_label(&r.kind),
+                    b.map_or("", |b| b.number.as_str()),
+                    b.map_or("", |b| b.date.as_str()),
+                    p.map_or("", |p| p.number.as_str()),
+                    p.map_or("", |p| p.date.as_str()),
+                    r.decision.as_deref().unwrap_or(""),
+                    r.note.as_deref().unwrap_or(""),
+                    &diffs,
+                    &itc,
+                ],
+                &[
+                    ba.taxable_paise,
+                    ba.igst_paise,
+                    ba.cgst_paise,
+                    ba.sgst_paise,
+                    ba.cess_paise,
+                    pa.taxable_paise,
+                    pa.igst_paise,
+                    pa.cgst_paise,
+                    pa.sgst_paise,
+                    pa.cess_paise,
+                ],
+            )?;
+        }
+    }
+    {
+        let ws = wb.add_worksheet().set_name("Purchase register")?;
+        ws.set_column_width(0, 30)?;
+        ws.set_column_width(1, 18)?;
+        for c in 2..=13 {
+            ws.set_column_width(c, 14)?;
+        }
+        let mut s = Sheet::new(ws);
+        s.header(&[
+            "Supplier",
+            "GSTIN",
+            "Type",
+            "Number",
+            "Date",
+            "2B status",
+            "ITC lines pending",
+            "Taxable",
+            "IGST",
+            "CGST",
+            "SGST",
+            "Cess",
+            "ITC claimable",
+        ])?;
+        for r in v.rows.iter().filter(|r| r.books.is_some()) {
+            let Some(b) = &r.books else { continue };
+            let status = match &r.found_in {
+                Some(m) => format!("In 2B for {m}"),
+                None => status_label(r.status).to_string(),
+            };
+            let doc_type = match b.doc_type.as_str() {
+                "debit_note" => "Debit note",
+                "expense" => "Expense",
+                _ => "Bill",
+            };
+            let pending = b.itc_pending_lines.to_string();
+            s.mixed(
+                &[
+                    &r.supplier_name,
+                    &r.supplier_gstin,
+                    doc_type,
+                    &b.number,
+                    &b.date,
+                    &status,
+                    &pending,
+                ],
+                &[
+                    b.amounts.taxable_paise,
+                    b.amounts.igst_paise,
+                    b.amounts.cgst_paise,
+                    b.amounts.sgst_paise,
+                    b.amounts.cess_paise,
+                    b.itc_claimable_paise,
+                ],
+            )?;
+        }
+    }
+    wb.save_to_buffer()
+}

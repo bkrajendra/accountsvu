@@ -406,6 +406,26 @@ pub async fn save_gstr3b_xlsx(
     Ok(Some(saved(&path, file.bytes.len())))
 }
 
+/// Asks where to save, then writes the GSTR-2B reconciliation workbook.
+/// `None` when cancelled.
+#[tauri::command]
+pub async fn save_gstr2b_xlsx(
+    app: AppHandle,
+    core: State<'_, AppCore>,
+    files: State<'_, SavedFiles>,
+    registration_id: String,
+    period: String,
+) -> CmdResult<Option<SavedFile>> {
+    let file = core.gstr2b_xlsx(&ctx(), &registration_id, &period).await?;
+    let Some(path) = save_dialog(&app, file.file_name.clone(), ("Excel workbook", "xlsx")).await
+    else {
+        return Ok(None);
+    };
+    write_file(&path, &file.bytes)?;
+    files.remember(&path);
+    Ok(Some(saved(&path, file.bytes.len())))
+}
+
 /// Asks where to save, then writes the import template (CSV with a BOM so
 /// Excel reads it as UTF-8). `None` when cancelled.
 #[tauri::command]

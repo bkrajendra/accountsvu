@@ -447,10 +447,11 @@ function TabBody({ tab, data }: { tab: Tab; data: Gstr1 }) {
 }
 
 /** GSTR-1 / GSTR-3B for the same month and GSTIN. */
-export function ReturnSwitch({ current, period, reg }: { current: "gstr1" | "gstr3b"; period: string; reg: string }) {
+export function ReturnSwitch({ current, period, reg }: { current: "gstr1" | "gstr3b" | "gstr2b"; period: string; reg: string }) {
   const items = [
     { id: "gstr1", label: "GSTR-1" },
     { id: "gstr3b", label: "GSTR-3B" },
+    { id: "gstr2b", label: "GSTR-2B" },
   ] as const;
   return (
     <nav aria-label="Return" className="mb-1 flex gap-3 text-[12px] font-semibold uppercase tracking-[0.08em]">

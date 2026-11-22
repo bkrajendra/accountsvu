@@ -170,7 +170,7 @@ fn heads_of_sales(l: &av_persistence::records::SalesLineRecord) -> Heads {
     }
 }
 
-fn heads_of(l: &PurchaseLineRecord) -> Heads {
+pub(crate) fn heads_of(l: &PurchaseLineRecord) -> Heads {
     Heads {
         igst: l.igst_paise,
         cgst: l.cgst_paise,
@@ -190,7 +190,7 @@ fn scale(h: Heads, sign: i64) -> Heads {
 
 /// `part` of `h` split across the heads in proportion, the last non-zero
 /// head taking the rounding (as the ITC posting does).
-fn split(h: Heads, part: i64) -> Heads {
+pub(crate) fn split(h: Heads, part: i64) -> Heads {
     let total = h.total();
     if total == 0 {
         return Heads::default();

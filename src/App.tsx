@@ -25,6 +25,7 @@ import { AgeingPage, GeneralLedgerPage, JournalPage, PartyLedgerPage } from "./p
 import { Setup } from "./pages/Setup";
 import { ReturnCentre } from "./pages/gst/ReturnCentre";
 import { Gstr1Page } from "./pages/gst/Gstr1Page";
+import { Gstr2bPage } from "./pages/gst/Gstr2bPage";
 import { Gstr3bPage } from "./pages/gst/Gstr3bPage";
 import { ToastProvider } from "./components/Toast";
 import { SessionGate } from "./lib/session";
@@ -73,6 +74,7 @@ const router = createHashRouter([
       { path: "gst", element: <ReturnCentre /> },
       { path: "gst/gstr1/:period", element: <Gstr1Page /> },
       { path: "gst/gstr3b/:period", element: <Gstr3bPage /> },
+      { path: "gst/gstr2b/:period", element: <Gstr2bPage /> },
       ...primaryNav
         .filter((n) => !["/", "/sales", "/purchases", "/parties", "/items", "/banking", "/reports", "/gst"].includes(n.path))
         .map((n) => ({ path: n.path.slice(1), element: <Placeholder item={n} /> })),

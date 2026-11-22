@@ -9,6 +9,7 @@
 //! never pass through binary floating point.
 
 pub mod gstr1;
+pub mod gstr2b;
 
 use serde::{Serialize, Serializer};
 use serde_json::value::RawValue;

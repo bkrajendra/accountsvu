@@ -23,6 +23,7 @@ use crate::records::{
     AccountTotalsRecord, AgeingDocRecord, BackupLogRecord, BooksLockRecord, FyCloseRecord,
     JournalRowRecord, LogoRecord,
 };
+use crate::records::{Gstr2bDecisionRecord, Gstr2bLineRecord, Gstr2bStatementRecord};
 
 pub type DbResult<T> = Result<T, DbError>;
 
@@ -62,6 +63,7 @@ pub trait UnitOfWork:
     + BankingRepo
     + ReportRepo
     + BackupRepo
+    + Gstr2bRepo
     + Send
 {
     fn commit(self) -> impl Future<Output = DbResult<()>> + Send;
@@ -674,4 +676,47 @@ pub trait BackupRepo {
         org_id: &str,
         kind: &str,
     ) -> impl Future<Output = DbResult<Option<BackupLogRecord>>> + Send;
+}
+
+/// GSTR-2B statements and reconciliation decisions (Phase 2.4).
+pub trait Gstr2bRepo {
+    /// Statements of a GSTIN, oldest month first.
+    fn list_gstr2b_statements(
+        &mut self,
+        org_id: &str,
+        registration_id: &str,
+    ) -> impl Future<Output = DbResult<Vec<Gstr2bStatementRecord>>> + Send;
+    fn get_gstr2b_statement(
+        &mut self,
+        org_id: &str,
+        registration_id: &str,
+        period: &str,
+    ) -> impl Future<Output = DbResult<Option<Gstr2bStatementRecord>>> + Send;
+    /// Replaces the statement of the same GSTIN and month, with its lines.
+    fn replace_gstr2b_statement(
+        &mut self,
+        s: &Gstr2bStatementRecord,
+        lines: &[Gstr2bLineRecord],
+    ) -> impl Future<Output = DbResult<()>> + Send;
+    fn gstr2b_lines(
+        &mut self,
+        statement_id: &str,
+    ) -> impl Future<Output = DbResult<Vec<Gstr2bLineRecord>>> + Send;
+    fn list_gstr2b_decisions(
+        &mut self,
+        org_id: &str,
+        registration_id: &str,
+    ) -> impl Future<Output = DbResult<Vec<Gstr2bDecisionRecord>>> + Send;
+    /// Inserts or replaces the decision for the row key in its period.
+    fn upsert_gstr2b_decision(
+        &mut self,
+        d: &Gstr2bDecisionRecord,
+    ) -> impl Future<Output = DbResult<()>> + Send;
+    fn delete_gstr2b_decision(
+        &mut self,
+        org_id: &str,
+        registration_id: &str,
+        period: &str,
+        row_key: &str,
+    ) -> impl Future<Output = DbResult<bool>> + Send;
 }
