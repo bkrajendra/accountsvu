@@ -562,7 +562,7 @@ function Editor({
           footer={
             <>
               <Button onClick={() => setConfirming(false)}>Not yet</Button>
-              <Button variant="primary" autoFocus onClick={() => {
+              <Button variant="primary" autoFocus data-autofocus onClick={() => {
                 setConfirming(false);
                 record.mutate(toInput(d));
               }}>

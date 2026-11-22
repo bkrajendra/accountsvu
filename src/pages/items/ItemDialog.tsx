@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Loader2, Package, Wrench } from "lucide-react";
+import { Loader2, Package, Search, Wrench } from "lucide-react";
 import { api, keys, type Item, type ItemInput, type ItemKind, type TaxCategory } from "../../lib/api";
 import { formatRate, paiseToInput } from "../../lib/format";
 import { useSave } from "../../lib/mutations";
@@ -10,6 +10,7 @@ import { ChoiceCards, Field, FormGrid, Select, TextInput, Toggle } from "../../c
 import { rateLabel } from "../../components/TaxWarnings";
 import { todayIso } from "../../lib/sales";
 import { HsnHint } from "./HsnHint";
+import { HsnFinder } from "./HsnDirectory";
 
 export const TAX_CATEGORIES: { value: TaxCategory; label: string }[] = [
   { value: "taxable", label: "Taxable" },
@@ -47,6 +48,7 @@ function draftFrom(i?: Item): Draft {
 export function ItemDialog({ item, onClose }: { item?: Item; onClose: () => void }) {
   const { data: options } = useQuery({ queryKey: keys.itemOptions, queryFn: api.itemOptions, staleTime: Infinity });
   const [d, setD] = useState<Draft>(() => draftFrom(item));
+  const [finding, setFinding] = useState(false);
   const save = useSave((input: ItemInput) => (item ? api.updateItem(item.id, input, item.rowVersion) : api.createItem(input)), {
     invalidate: [keys.items],
     success: item ? "Item saved" : "Item added",
@@ -106,7 +108,12 @@ export function ItemDialog({ item, onClose }: { item?: Item; onClose: () => void
           </Field>
           <Field label={goods ? "HSN code" : "SAC code"} hint={goods ? "4, 6 or 8 digits." : "6 digits, starts with 99."} error={err.hsnSac}>
             {(p) => (
-              <TextInput id={p.id} invalid={p.invalid} className="num" inputMode="numeric" maxLength={8} value={d.hsnSac} onChange={(e) => set("hsnSac", e.target.value.replace(/\D/g, ""))} />
+              <div className="flex gap-2">
+                <TextInput id={p.id} invalid={p.invalid} className="num min-w-0 flex-1" inputMode="numeric" maxLength={8} value={d.hsnSac} onChange={(e) => set("hsnSac", e.target.value.replace(/\D/g, ""))} />
+                <Button className="shrink-0" onClick={() => setFinding(true)} aria-label={goods ? "Find HSN code" : "Find SAC code"}>
+                  <Search size={15} /> Find
+                </Button>
+              </div>
             )}
           </Field>
           <HsnHint
@@ -127,6 +134,18 @@ export function ItemDialog({ item, onClose }: { item?: Item; onClose: () => void
             {(p) => <TextInput id={p.id} invalid={p.invalid} value={d.description} onChange={(e) => set("description", e.target.value)} />}
           </Field>
         </FormGrid>
+        {finding && (
+          <HsnFinder
+            initialQuery={d.hsnSac || d.name.trim()}
+            kind={goods ? "hsn" : "sac"}
+            onClose={() => setFinding(false)}
+            onPick={(h) => {
+              set("hsnSac", h.code);
+              if (h.kind !== d.kind) set("kind", h.kind);
+              setFinding(false);
+            }}
+          />
+        )}
 
         <FormGrid>
           <Field label="GST treatment" error={err.taxCategory}>

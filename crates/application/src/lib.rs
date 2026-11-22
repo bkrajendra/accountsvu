@@ -12,6 +12,7 @@ mod error;
 pub mod filing;
 pub mod gstr2b;
 pub mod gstr3b;
+pub mod hsn_directory;
 pub mod import;
 pub mod masters;
 mod posting;
@@ -51,7 +52,8 @@ pub use setup::{
 use av_domain::Money;
 use av_persistence::records::OrganisationRecord;
 use av_persistence::{
-    BankingRepo, LedgerQueries, OrganisationRepo, RegistrationRepo, SqliteStore, Store,
+    BankingRepo, HsnDirectory, LedgerQueries, OrganisationRepo, RegistrationRepo, SqliteStore,
+    Store,
 };
 use chrono::NaiveDate;
 use serde::Serialize;
@@ -95,6 +97,8 @@ type Today = Arc<dyn Fn() -> NaiveDate + Send + Sync>;
 pub struct AppCore<S: Store = SqliteStore> {
     store: S,
     today: Today,
+    /// The local HSN/SAC directory (Phase 2.5.1), when the host opened one.
+    hsn_directory: Option<HsnDirectory>,
 }
 
 fn system_today() -> Today {
@@ -114,6 +118,7 @@ impl AppCore<SqliteStore> {
         Ok(AppCore {
             store: SqliteStore::open(db_path).await?,
             today: Arc::new(move || today),
+            hsn_directory: None,
         })
     }
 
@@ -132,6 +137,7 @@ impl AppCore<SqliteStore> {
         Ok(AppCore {
             store: SqliteStore::open_in_memory().await?,
             today: Arc::new(move || today),
+            hsn_directory: None,
         })
     }
 }
@@ -141,7 +147,14 @@ impl<S: Store> AppCore<S> {
         AppCore {
             store,
             today: system_today(),
+            hsn_directory: None,
         }
+    }
+
+    /// Attach the local HSN/SAC directory (a separate reference database).
+    pub fn with_hsn_directory(mut self, directory: HsnDirectory) -> Self {
+        self.hsn_directory = Some(directory);
+        self
     }
 
     pub(crate) fn today(&self) -> NaiveDate {

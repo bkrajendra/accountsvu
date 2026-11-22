@@ -482,7 +482,7 @@ fn read_spreadsheet(bytes: &[u8]) -> AppResult<Vec<Vec<String>>> {
         .collect())
 }
 
-fn cell_text(c: &Data) -> String {
+pub(crate) fn cell_text(c: &Data) -> String {
     match c {
         Data::Empty => String::new(),
         Data::String(s) => s.clone(),

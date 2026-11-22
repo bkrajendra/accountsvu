@@ -5,10 +5,12 @@
 //! * [`sqlite`] — the SQLite adapter used in personal mode.
 //!   A `postgres` adapter implementing the same traits arrives in Phase 5.
 
+pub mod hsn_directory;
 pub mod records;
 pub mod repo;
 pub mod sqlite;
 
+pub use hsn_directory::HsnDirectory;
 pub use repo::{
     AccountRepo, AttachmentRepo, AuditRepo, BackupRepo, BankingRepo, DbResult, GstFilingRepo,
     Gstr2bRepo, ItemRepo, JournalRepo, LedgerQueries, OrganisationRepo, PartyRepo, PurchaseRepo,

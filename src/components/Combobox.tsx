@@ -114,6 +114,7 @@ export function Combobox({
         aria-activedescendant={open && matches[active] ? `${listId}-${active}` : undefined}
         autoComplete="off"
         autoFocus={autoFocus}
+        data-autofocus={autoFocus || undefined}
         value={shown}
         placeholder={placeholder}
         onChange={(e) => {

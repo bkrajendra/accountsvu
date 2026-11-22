@@ -9,6 +9,7 @@ import { ActivityTab } from "./ActivityTab";
 import { GeneralTab } from "./GeneralTab";
 import { PeriodsTab } from "./PeriodsTab";
 import { SecurityTab } from "./SecurityTab";
+import { HsnDirectoryTab } from "./HsnDirectoryTab";
 
 const TABS = [
   { id: "business", label: "Business", el: <BusinessTab /> },
@@ -16,6 +17,7 @@ const TABS = [
   { id: "numbering", label: "Numbering", el: <NumberingTab /> },
   { id: "accounts", label: "Chart of accounts", el: <AccountsTab /> },
   { id: "periods", label: "Books & periods", el: <PeriodsTab /> },
+  { id: "hsn", label: "HSN/SAC directory", el: <HsnDirectoryTab /> },
   { id: "security", label: "Backup & security", el: <SecurityTab /> },
   { id: "activity", label: "Activity log", el: <ActivityTab /> },
   { id: "general", label: "Appearance & about", el: <GeneralTab /> },
@@ -29,7 +31,7 @@ export function Settings() {
   return (
     <>
       <PageHeader title="Settings" />
-      <div role="tablist" aria-label="Settings sections" className="mb-6 flex gap-1 border-b border-line">
+      <div role="tablist" aria-label="Settings sections" className="mb-6 flex gap-1 overflow-x-auto border-b border-line">
         {TABS.map((t) => {
           const selected = t.id === active.id;
           return (
@@ -40,7 +42,7 @@ export function Settings() {
               aria-selected={selected}
               onClick={() => setParams({ tab: t.id }, { replace: true })}
               className={clsx(
-                "-mb-px border-b-2 px-3 pb-2.5 pt-1 text-[13.5px] font-medium",
+                "-mb-px shrink-0 whitespace-nowrap border-b-2 px-3 pb-2.5 pt-1 text-[13.5px] font-medium",
                 selected ? "border-accent-fill text-fg" : "border-transparent text-muted hover:text-fg",
               )}
             >

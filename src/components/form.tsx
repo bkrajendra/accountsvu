@@ -47,6 +47,7 @@ export function TextInput({ invalid, className, ...rest }: InputProps) {
   return (
     <input
       {...rest}
+      data-autofocus={rest.autoFocus || undefined}
       aria-invalid={invalid || undefined}
       className={clsx(control, invalid ? "border-danger" : "border-line-strong focus:border-accent-fill", className)}
     />

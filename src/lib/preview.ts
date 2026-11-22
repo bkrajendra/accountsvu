@@ -398,6 +398,134 @@ function evaluateImport(kind: ImportKind, table: ImportTable, mapping: ImportMap
   });
 }
 
+// HSN/SAC directory sample (Phase 2.5.1). The desktop app syncs the full GSTN
+// master (about 22,600 codes); the preview "syncs" this extract.
+const DIRECTORY_SAMPLE: [string, string][] = [
+  ["02", "Meat and edible meat offal"],
+  ["0201", "Meat of bovine animals, fresh and chilled"],
+  ["020110", "Carcasses and half-carcasses"],
+  ["02011000", "Carcasses and half-carcasses"],
+  ["0202", "Meat of bovine animals, frozen"],
+  ["020210", "Carcases and half-carcases"],
+  ["02021000", "Carcases and half-carcases"],
+  ["020230", "Boneless"],
+  ["02023000", "Boneless"],
+  ["0207", "Meat and edible offal, of the poultry of heading 0105, fresh, chilled or frozen"],
+  ["020713", "Of fowls of the species Gallus domesticus: cuts and offal, fresh or chilled"],
+  ["02071300", "Cuts and offal, fresh or chilled"],
+  ["04", "Dairy produce; birds' eggs; natural honey; edible products of animal origin, not elsewhere specified"],
+  ["0405", "Butter and other fats and oils derived from milk; dairy spreads"],
+  ["040510", "Butter"],
+  ["04051000", "Butter"],
+  ["040590", "Other"],
+  ["04059020", "Ghee"],
+  ["04059090", "Other"],
+  ["34", "Soap, organic surface-active agents, washing preparations, lubricating preparations"],
+  ["3401", "Soap; organic surface-active products and preparations for use as soap, in the form of bars, cakes"],
+  ["340111", "For toilet use (including medicated products)"],
+  ["34011110", "Medicated toilet soap"],
+  ["34011190", "Other"],
+  ["84", "Nuclear reactors, boilers, machinery and mechanical appliances; parts thereof"],
+  ["8415", "Air conditioning machines, comprising a motor-driven fan and elements for changing the temperature and humidity"],
+  ["841510", "Of a kind designed to be fixed to a window, wall, ceiling or floor, self-contained or split-system"],
+  ["84151010", "Window or wall types, self-contained"],
+  ["84151090", "Other"],
+  ["8418", "Refrigerators, freezers and other refrigerating or freezing equipment, electric or other"],
+  ["841821", "Household type refrigerators: compression-type"],
+  ["84182100", "Compression-type"],
+  ["8471", "Automatic data processing machines and units thereof; magnetic or optical readers"],
+  ["847130", "Portable automatic data processing machines, weighing not more than 10 kg"],
+  ["84713010", "Personal computer"],
+  ["84713090", "Other"],
+  ["847160", "Input or output units, whether or not containing storage units in the same housing"],
+  ["84716060", "Mouse"],
+  ["84716040", "Printer"],
+  ["85", "Electrical machinery and equipment and parts thereof; sound recorders and reproducers, television"],
+  ["8517", "Telephone sets, including smartphones and other telephones for cellular networks or for other wireless networks"],
+  ["851713", "Smartphones"],
+  ["85171300", "Smartphones"],
+  ["99", "All Services"],
+  ["9954", "Construction services"],
+  ["995411", "Construction services of single dwelling or multi dwelling or multi-storied residential buildings"],
+  ["9983", "Other professional, technical and business services"],
+  ["998311", "Management consulting and management services including financial, strategic, human resources, marketing"],
+  ["998313", "Information technology (IT) consulting and support services"],
+  ["998314", "Information technology (IT) design and development services"],
+  ["9987", "Maintenance, repair and installation (except construction) services"],
+  ["998713", "Maintenance and repair services of computers and peripheral equipment"],
+  ["998719", "Maintenance and repair services of other goods n.e.c."],
+];
+type DirectoryState = { syncedAt: string; channel: "gstn" | "file"; origin: string; diff: Record<string, number> };
+let directory: DirectoryState | null = null;
+const GSTN_MASTER = "https://tutorial.gst.gov.in/downloads/HSN_SAC.xlsx";
+const directoryMap = new Map(DIRECTORY_SAMPLE);
+
+function directoryStatus() {
+  const n = directory ? DIRECTORY_SAMPLE.length : 0;
+  const sac = directory ? DIRECTORY_SAMPLE.filter(([c]) => c.startsWith("99")).length : 0;
+  return {
+    ready: !!directory, hsnCodes: n - sac, sacCodes: sac, delisted: 0,
+    syncedAt: directory?.syncedAt ?? null, channel: directory?.channel ?? null, origin: directory?.origin ?? null,
+    sha256: directory ? "preview" : null, lastDiff: directory?.diff ?? null, sourceUrl: GSTN_MASTER,
+  };
+}
+
+function directorySearch(input: { query: string; kind?: string | null; limit?: number; date?: string | null }) {
+  const q = String(input.query ?? "").trim().toLowerCase();
+  const limit = Math.min(Math.max(input.limit ?? 50, 1), 200);
+  const date = input.date ?? new Date().toISOString().slice(0, 10);
+  const rateFor = (code: string) => {
+    const rule = hsnRule(code);
+    const r = rule && hsnRateOn(rule, date);
+    return rule && r ? { ruleCode: rule.code, taxCategory: "taxable", rateBp: r.bp, conditional: false } : null;
+  };
+  const kindOk = (code: string) => !input.kind || (input.kind === "sac") === code.startsWith("99");
+  if (!directory) {
+    const hits = PREVIEW_HSN.filter((h) => (/^\d+$/.test(q) ? h.code.startsWith(q) || q.startsWith(h.code) : h.description.toLowerCase().includes(q)))
+      .filter((h) => !input.kind || (input.kind === "sac") === (h.kind === "service"))
+      .map((h) => ({ code: h.code, kind: h.kind, description: h.description, delisted: false, chapter: null, heading: null, subheading: null, rate: rateFor(h.code) }));
+    return { hits: hits.slice(0, limit), more: hits.length > limit, source: "rule_pack" };
+  }
+  const digits = q.replace(/[\s.]/g, "");
+  const parent = (code: string, len: number) =>
+    code.length > len && directoryMap.has(code.slice(0, len)) ? { code: code.slice(0, len), description: directoryMap.get(code.slice(0, len))! } : null;
+  const context = (code: string) => [2, 4, 6].map((l) => parent(code, l)?.description ?? "").join(" ").toLowerCase();
+  const words = q.split(/[^a-z0-9]+/).filter(Boolean);
+  const matches = DIRECTORY_SAMPLE.filter(([code, desc]) => {
+    if (!kindOk(code)) return false;
+    if (/^\d+$/.test(digits)) return code.startsWith(digits);
+    const hay = `${desc} ${context(code)}`.toLowerCase().split(/[^a-z0-9]+/);
+    return words.every((w) => hay.some((t) => t.startsWith(w)));
+  });
+  if (/^\d+$/.test(digits)) matches.sort((a, b) => a[0].localeCompare(b[0]));
+  else matches.sort((a, b) => {
+    const score = ([, d]: [string, string]) => -words.filter((w) => d.toLowerCase().includes(w)).length;
+    return score(a) - score(b) || b[0].length - a[0].length || a[0].localeCompare(b[0]);
+  });
+  const hits = matches.slice(0, limit).map(([code, description]) => ({
+    code, kind: code.startsWith("99") ? "service" : "goods", description, delisted: false,
+    chapter: parent(code, 2), heading: parent(code, 4), subheading: parent(code, 6), rate: rateFor(code),
+  }));
+  return { hits, more: matches.length > limit, source: "directory" };
+}
+
+async function directorySync(channel: "gstn" | "file", origin: string, onProgress?: (p: unknown) => void) {
+  if (channel === "gstn") {
+    const total = 668_474;
+    for (let got = 0; got < total; got = Math.min(total, got + 120_000)) {
+      onProgress?.({ stage: "downloading", received: got, total });
+      await new Promise((r) => setTimeout(r, 140));
+    }
+    onProgress?.({ stage: "updating", received: total, total });
+    await new Promise((r) => setTimeout(r, 400));
+  }
+  const unchanged = !!directory;
+  const diff = { added: unchanged ? 0 : DIRECTORY_SAMPLE.length, changed: 0, delisted: 0, restored: 0, unchanged: unchanged ? DIRECTORY_SAMPLE.length : 0 };
+  directory = { syncedAt: new Date().toISOString(), channel, origin, diff: unchanged ? directory!.diff : diff };
+  if (!unchanged) log("hsn_directory.synced", null, { channel, origin, codes: DIRECTORY_SAMPLE.length, diff });
+  return { unchanged, diff, skippedRows: 0, status: directoryStatus() };
+}
+
 function masters(command: string, args: Record<string, any>): unknown {
   switch (command) {
     case "list_parties":
@@ -451,6 +579,14 @@ function masters(command: string, args: Record<string, any>): unknown {
         })
         .filter(Boolean);
     }
+    case "hsn_directory_status":
+      return directoryStatus();
+    case "search_hsn_directory":
+      return directorySearch(args.input ?? {});
+    case "sync_hsn_directory":
+      return directorySync("gstn", GSTN_MASTER, args.onProgress);
+    case "import_hsn_master_file":
+      return directorySync("file", "HSN_SAC.xlsx");
     case "rule_pack_info":
       return {
         version: PREVIEW_PACK, published: "2026-11-20", hsnEntries: 46,
@@ -2804,7 +2940,7 @@ function hostCommand(command: string, args: Record<string, any>): unknown {
       throw { code: "invalid_input", message: "The browser preview can't restart. Restoring runs in the desktop app.", fields: [] } satisfies Fail;
     case "check_update":
       return {
-        currentVersion: "0.2.6",
+        currentVersion: "0.2.7",
         version: "0.3.0",
         date: new Date(Date.now() - 86_400_000).toISOString(),
         notes: "AccountsVU 0.3.0 — sample release notes from the browser preview.",
@@ -2828,7 +2964,7 @@ export async function previewBackend(command: string, args: Record<string, any> 
   if (hosted !== undefined) return hosted;
   switch (command) {
     case "app_health":
-      return { appVersion: "0.2.6", schemaVersion: 12, database: "(browser preview — in memory)", organisationConfigured: !!org };
+      return { appVersion: "0.2.7", schemaVersion: 12, database: "(browser preview — in memory)", organisationConfigured: !!org };
     case "dashboard_summary":
       return {
         salesThisMonth: "0", purchasesThisMonth: "0",

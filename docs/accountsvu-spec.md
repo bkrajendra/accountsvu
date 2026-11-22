@@ -106,6 +106,7 @@ A single-user local installation can default to Owner. The permission model shou
 ### 5.4 Items and services
 
 - Maintain item/service name, code, description, HSN/SAC, unit of measure, default tax treatment, sales price, purchase cost and active dates.
+- Find HSN/SAC codes from the item form: a finder searches the local HSN/SAC directory by code or words and shows each code's chapter, heading and sub-heading and the rule pack's rate. The directory is synced from the GST portal's HSN/SAC master (or an imported copy) in Settings (D24).
 - Tax rates and classification are effective-dated and configurable. A transaction stores a snapshot of the rate/classification used when it was issued.
 - Allow non-stock services and stock-tracked goods. Inventory quantities are optional in MVP but the item model must support them.
 
@@ -136,7 +137,7 @@ Responsibilities:
 |---|---|
 | Tax computation | Taxable value; CGST/SGST/UTGST/IGST/cess per line; document totals and rupee round-off (D11) |
 | Supply classification | Intra-state vs inter-state from place of supply; B2B/B2C/B2CL; exports and SEZ (with/without payment); deemed exports |
-| HSN/SAC | Lookup and validation against the rule pack; rate suggestion by HSN/SAC and date; HSN summary for returns |
+| HSN/SAC | Lookup and validation against the rule pack; rate suggestion by HSN/SAC and date; HSN summary for returns. The full code list (descriptions only, no rates) comes from the local HSN/SAC directory (D24) |
 | Exempt, nil-rated, non-GST | Separate treatment and reporting for each; never mixed with taxable value |
 | Reverse charge (RCM) | Inward RCM liability (incl. purchases from unregistered persons where notified), self-invoice data, cash-only discharge; outward RCM flag |
 | Input Tax Credit | Eligibility status per line (pending/eligible/ineligible/partial) with reason; blocked credits (s.17(5)); common-credit reversal (rules 42/43) as a workpaper; ITC reversal and reclaim tracking |
@@ -292,7 +293,7 @@ Show five useful cards: Sales this month, Purchases this month, Cash/bank balanc
 - **Purchases:** bill list with supplier, bill date, gross amount, payment status and ITC review status.
 - **GST Filing:** stepper with Prepare → Reconcile → Validate → Review → Authorise & File → Filed. Show errors and warnings inline, not only in a modal.
 - **Reports:** date/GSTIN filters, clear totals, export action and drill-down to source transactions.
-- **Settings:** GST profile, numbering, tax defaults, users, provider connection, backups and audit export.
+- **Settings:** GST profile, numbering, tax defaults, HSN/SAC directory, users, provider connection, backups and audit export.
 
 ### 6.4 Interaction rules
 
@@ -535,6 +536,7 @@ Decisions added on 18 November 2026 (architecture review):
 | D21 | Commercial offline | Commercial v1 clients are **online-only**. Using SQLite as an offline working store for commercial clients (outbox, sync, offline numbering) is a separate later phase (Phase 6). |
 | D22 | Where GSP calls run | **No hosted gateway for now; personal single-business mode comes first.** Personal mode files through the offline channel; the online channel is optional and uses GSP credentials issued to the taxpayer, kept in the OS credential store. Our own GSP secrets never ship in the desktop binary. Commercial: provider runs in the hosted API. |
 | D23 | GST integration layer | Return centre → **FilingChannel** → *Offline* (versioned portal format adapters in `gst-formats`) or *Online* (`dyn GstProvider` with separate capability traits for filing, 3B workflow, tax payment and e-invoicing). Submission and payment are always separate operations (§5.8). |
+| D24 | HSN/SAC directory | The full HSN/SAC list is a **lookup aid**, separate from the rule pack: synced from the GSTN master (`HSN_SAC.xlsx`, downloaded from one fixed URL or imported as a file) into its own local SQLite file with a full-text index, shared by the install and not backed up. It gives codes and descriptions only; rates and validation stay with the rule pack (D12). Codes dropped from the master are kept and flagged. |
 
 Additions adopted into scope: financial-year close and balance carry-forward; Round-off ledger; per-bank statement CSV mapping profiles; a posting idempotency key on documents; a consistent drill-down pattern from every tax figure to source documents; a sample GSTR-2B fixture set for tests.
 

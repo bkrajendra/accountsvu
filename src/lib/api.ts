@@ -341,6 +341,74 @@ export interface HsnSuggestion {
   source: string | null;
 }
 
+/** HSN/SAC directory (Phase 2.5.1). */
+export type DirectoryKind = "hsn" | "sac";
+
+export interface DirectoryDiff {
+  added: number;
+  changed: number;
+  delisted: number;
+  restored: number;
+  unchanged: number;
+}
+
+export interface DirectoryStatus {
+  ready: boolean;
+  hsnCodes: number;
+  sacCodes: number;
+  delisted: number;
+  syncedAt: string | null;
+  /** `gstn` (downloaded) or `file` (imported). */
+  channel: "gstn" | "file" | null;
+  origin: string | null;
+  sha256: string | null;
+  lastDiff: DirectoryDiff | null;
+  sourceUrl: string;
+}
+
+export interface CodeRef {
+  code: string;
+  description: string;
+}
+
+export interface DirectoryHit {
+  code: string;
+  kind: ItemKind;
+  description: string;
+  delisted: boolean;
+  chapter: CodeRef | null;
+  heading: CodeRef | null;
+  subheading: CodeRef | null;
+  /** The rule pack's rate for the code, when the pack covers it. */
+  rate: { ruleCode: string; taxCategory: TaxCategory; rateBp: number; conditional: boolean } | null;
+}
+
+export interface DirectorySearchResult {
+  hits: DirectoryHit[];
+  more: boolean;
+  source: "directory" | "rule_pack";
+}
+
+export interface DirectorySearchInput {
+  query: string;
+  kind?: DirectoryKind | null;
+  limit?: number;
+  date?: string | null;
+}
+
+export interface DirectorySyncResult {
+  unchanged: boolean;
+  diff: DirectoryDiff;
+  skippedRows: number;
+  status: DirectoryStatus;
+}
+
+export interface DirectorySyncProgress {
+  stage: "downloading" | "updating";
+  received: number;
+  total: number | null;
+}
+
 export interface RulePackInfo {
   version: string;
   published: string;
@@ -1774,6 +1842,17 @@ export const api = {
   itemOptions: () => call<ItemOptions>("item_options"),
   hsnLookup: (query: string, date?: string) => call<HsnSuggestion[]>("hsn_lookup", { query, date: date ?? null }),
   rulePackInfo: () => call<RulePackInfo>("rule_pack_info"),
+  hsnDirectoryStatus: () => call<DirectoryStatus>("hsn_directory_status"),
+  searchHsnDirectory: (input: DirectorySearchInput) => call<DirectorySearchResult>("search_hsn_directory", { input }),
+  /** Downloads the GSTN master and rebuilds the directory. */
+  syncHsnDirectory: (onProgress: (p: DirectorySyncProgress) => void) => {
+    if (!runningInTauri) return call<DirectorySyncResult>("sync_hsn_directory", { onProgress });
+    const channel = new Channel<DirectorySyncProgress>();
+    channel.onmessage = onProgress;
+    return call<DirectorySyncResult>("sync_hsn_directory", { onProgress: channel });
+  },
+  /** Rebuilds the directory from a downloaded copy; null when cancelled. */
+  importHsnMasterFile: () => call<DirectorySyncResult | null>("import_hsn_master_file"),
   listItems: () => call<Item[]>("list_items"),
   createItem: (input: ItemInput) => call<Item>("create_item", { input }),
   updateItem: (id: string, input: ItemInput, expectedVersion: number) =>
@@ -1942,6 +2021,7 @@ export const keys = {
   parties: ["parties"] as const,
   items: ["items"] as const,
   itemOptions: ["itemOptions"] as const,
+  hsnDirectory: ["hsnDirectory"] as const,
   sales: ["sales"] as const,
   salesDocument: (id: string) => ["sales", id] as const,
   purchases: ["purchases"] as const,

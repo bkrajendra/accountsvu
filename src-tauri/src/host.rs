@@ -292,7 +292,10 @@ async fn save_dialog(
     .flatten()
 }
 
-async fn open_dialog(app: &AppHandle, filter: (&'static str, &'static str)) -> Option<PathBuf> {
+pub(crate) async fn open_dialog(
+    app: &AppHandle,
+    filter: (&'static str, &'static str),
+) -> Option<PathBuf> {
     let app = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let mut d = app.dialog().file().add_filter(filter.0, &[filter.1]);

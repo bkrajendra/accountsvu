@@ -3,6 +3,7 @@
 
 mod commands;
 mod host;
+mod hsn;
 mod updater;
 
 use std::sync::Mutex;
@@ -101,6 +102,10 @@ pub fn run() {
         commands::set_logo,
         commands::get_logo,
         commands::remove_logo,
+        hsn::hsn_directory_status,
+        hsn::search_hsn_directory,
+        hsn::sync_hsn_directory,
+        hsn::import_hsn_master_file,
         host::app_session,
         host::lock_app,
         host::unlock_app,
@@ -145,7 +150,14 @@ pub fn run() {
             let _ = std::fs::remove_file(paths.staging());
             let stamp = chrono_stamp();
             let kept = av_persistence::sqlite::apply_pending_restore(&db_path, &stamp)?;
-            let core = tauri::async_runtime::block_on(AppCore::open(&db_path))?;
+            let mut core = tauri::async_runtime::block_on(AppCore::open(&db_path))?;
+            // The HSN/SAC directory is a lookup aid in its own file; the app
+            // works without it.
+            let hsn_path = data_dir.join(av_persistence::hsn_directory::FILE_NAME);
+            match tauri::async_runtime::block_on(av_persistence::HsnDirectory::open(&hsn_path)) {
+                Ok(d) => core = core.with_hsn_directory(d),
+                Err(e) => tracing::warn!(error = %e, "could not open the HSN/SAC directory"),
+            }
             let kept_name = kept
                 .as_ref()
                 .and_then(|k| k.file_name())
