@@ -17,7 +17,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import clsx from "clsx";
-import { api, keys, type MoneyString } from "../lib/api";
+import { api, keys, type MoneyString, type ReturnPeriod } from "../lib/api";
 import { formatInr, greeting, monthBounds, monthLabel } from "../lib/format";
 import { shortDate } from "../lib/sales";
 import { Badge, Button, Card, PageHeader } from "../components/ui";
@@ -41,6 +41,14 @@ export function Overview() {
   const configured = data?.organisationConfigured ?? true;
   const { data: backup } = useQuery({ queryKey: keys.backupStatus, queryFn: api.backupStatus, enabled: configured });
   const { data: books } = useQuery({ queryKey: keys.booksControl, queryFn: api.booksControl, enabled: configured });
+  const { data: centre } = useQuery({
+    queryKey: keys.report("gst", "centre", "", ""),
+    queryFn: () => api.returnCentre(null, null),
+    enabled: configured && !!reg,
+  });
+  const booksStart = profile?.organisation?.booksStartDate ?? "";
+  const returns = nextReturns(centre?.periods ?? [], booksStart);
+  const twoB = twoBStatus(centre?.periods ?? [], booksStart);
 
   const cards: { label: string; value?: MoneyString; icon: LucideIcon; hint: string; estimate?: boolean }[] = [
     { label: "Sales this month", value: data?.salesThisMonth, icon: Receipt, hint: monthLabel() },
@@ -142,24 +150,61 @@ export function Overview() {
                 />
               )
             )}
-            <ActionRow
-              icon={CalendarClock}
-              tone="neutral"
-              title="GSTR-1 and GSTR-3B"
-              detail={
-                reg
-                  ? `${reg.filingFrequency === "monthly" ? "Monthly" : "Quarterly"} filer · due dates arrive with the GST workbench.`
-                  : "Due dates appear once a GSTIN and filing frequency are set."
-              }
-              status={reg ? <Badge>Phase 2</Badge> : <Badge>Not configured</Badge>}
-            />
-            <ActionRow
-              icon={AlertTriangle}
-              tone="neutral"
-              title="GSTR-2B mismatches"
-              detail="Import your 2B statement to reconcile input tax credit."
-              status={<Badge>Phase 2</Badge>}
-            />
+            {!reg ? (
+              <ActionRow
+                icon={CalendarClock}
+                tone="neutral"
+                title="GSTR-1 and GSTR-3B"
+                detail="Due dates appear once a GSTIN and filing frequency are set."
+                status={<Badge>Not configured</Badge>}
+              />
+            ) : returns ? (
+              <ActionRow
+                icon={CalendarClock}
+                tone={returns.overdue ? "warning" : "neutral"}
+                title={`GSTR-1 and GSTR-3B for ${returns.period.label}`}
+                detail={returns.detail}
+                status={
+                  returns.overdue ? (
+                    <Badge tone="warning" icon={<AlertTriangle size={11} />}>Overdue</Badge>
+                  ) : returns.period.status === "due" ? (
+                    <Badge tone="accent">Due</Badge>
+                  ) : (
+                    <Badge>Open</Badge>
+                  )
+                }
+                onClick={() => navigate(`/gst/${returns.gstr1Done ? "gstr3b" : "gstr1"}/${returns.period.period}`)}
+              />
+            ) : (
+              centre && (
+                <ActionRow
+                  icon={CalendarClock}
+                  tone="neutral"
+                  title="GSTR-1 and GSTR-3B"
+                  detail="Every return this year is recorded as filed."
+                  status={<Badge tone="success">Done</Badge>}
+                  onClick={() => navigate("/gst")}
+                />
+              )
+            )}
+            {reg && twoB && (
+              <ActionRow
+                icon={AlertTriangle}
+                tone={twoB.review ? "warning" : "neutral"}
+                title={twoB.title}
+                detail={twoB.detail}
+                status={
+                  twoB.review ? (
+                    <Badge tone="warning">{twoB.review} to review</Badge>
+                  ) : twoB.imported ? (
+                    <Badge tone="success">Done</Badge>
+                  ) : (
+                    <Badge tone="accent">To do</Badge>
+                  )
+                }
+                onClick={() => navigate(`/gst/gstr2b/${twoB.period.period}`)}
+              />
+            )}
             {configured && backup && (
               <ActionRow
                 icon={HardDriveDownload}
@@ -247,4 +292,38 @@ function HealthRow({ ok = false, label }: { ok?: boolean; label: string }) {
       <span className={ok ? "" : "text-muted"}>{label}</span>
     </li>
   );
+}
+
+/** Months that count: inside the books, or with something recorded. */
+const relevant = (p: ReturnPeriod, booksStart: string) => p.to >= booksStart || p.documentCount > 0 || p.netItcPaise !== 0;
+
+/** The oldest month with a return still to file, else the open month. */
+function nextReturns(periods: ReturnPeriod[], booksStart: string) {
+  const oldestFirst = [...periods].reverse().filter((p) => relevant(p, booksStart));
+  const pending = oldestFirst.find((p) => p.status !== "open" && (!p.gstr1Filed || !p.gstr3bFiled));
+  const period = pending ?? oldestFirst.find((p) => p.status === "open" && (!p.gstr1Filed || !p.gstr3bFiled));
+  if (!period) return null;
+  const gstr1Done = !!period.gstr1Filed;
+  const parts = [
+    gstr1Done ? "GSTR-1 filed" : `GSTR-1 due ${shortDate(period.gstr1Due)}`,
+    period.gstr3bFiled ? "GSTR-3B filed" : `GSTR-3B due ${shortDate(period.gstr3bDue)}`,
+  ];
+  if (period.errorCount) parts.push(`${period.errorCount} to fix`);
+  const overdue = (!gstr1Done && period.status === "past_due") || (!period.gstr3bFiled && period.gstr3bStatus === "past_due");
+  return { period, gstr1Done, overdue, detail: parts.join(" · ") };
+}
+
+/** GSTR-2B: lines waiting for a decision, else the latest closed month without a statement. */
+function twoBStatus(periods: ReturnPeriod[], booksStart: string) {
+  const months = periods.filter((p) => relevant(p, booksStart));
+  const review = months.find((p) => p.gstr2bNeedsReview > 0);
+  if (review) {
+    const total = months.reduce((a, p) => a + p.gstr2bNeedsReview, 0);
+    return { period: review, review: total, imported: true, title: `GSTR-2B for ${review.label}`, detail: "Some lines don't match your purchases yet. Accept, defer or fix them." };
+  }
+  const closed = months.find((p) => p.status !== "open");
+  if (!closed) return null;
+  if (!closed.gstr2bImported)
+    return { period: closed, review: 0, imported: false, title: `Import GSTR-2B for ${closed.label}`, detail: "Download it from the GST portal to reconcile input tax credit." };
+  return { period: closed, review: 0, imported: true, title: `GSTR-2B for ${closed.label}`, detail: "Reconciled with your purchases." };
 }

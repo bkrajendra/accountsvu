@@ -20,6 +20,7 @@ type CmdResult<T> = Result<T, CommandError>;
 
 /// Where people can download installers by hand.
 const RELEASES_PAGE: &str = "https://github.com/bkrajendra/accountsvu/releases/latest";
+const SUPPORT_PAGE: &str = "https://buymeacoffee.com/aszy3yb";
 
 /// The update found by the last check, kept for `install_update`.
 #[derive(Default)]
@@ -150,6 +151,14 @@ pub async fn install_update(
     update.install(bytes).map_err(install_err)?;
     core.close().await;
     app.restart();
+}
+
+/// Opens the Buy Me a Coffee page in the default browser.
+#[tauri::command]
+pub fn open_support_page(app: AppHandle) -> CmdResult<()> {
+    app.opener()
+        .open_url(SUPPORT_PAGE, None::<&str>)
+        .map_err(|e| CommandError::new("io_error", e.to_string()))
 }
 
 /// Opens the releases page in the default browser.

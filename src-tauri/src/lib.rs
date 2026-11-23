@@ -135,6 +135,7 @@ pub fn run() {
         updater::check_update,
         updater::install_update,
         updater::open_releases_page,
+        updater::open_support_page,
     ];
 
     tauri::Builder::default()

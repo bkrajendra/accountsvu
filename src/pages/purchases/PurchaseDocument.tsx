@@ -295,7 +295,7 @@ function ItcDialog({ doc, line, onClose }: { doc: PurchaseDocumentView; line: Pu
             {(p) => <TextInput id={p.id} invalid={p.invalid} value={f.reason ?? ""} placeholder="e.g. Blocked credit u/s 17(5)" onChange={(e) => setF((x) => ({ ...x, reason: e.target.value }))} />}
           </Field>
         )}
-        <p className="text-[12.5px] text-muted">Saving posts an adjusting entry that moves the tax between input tax, pending and the line's cost. Matching with GSTR-2B comes in Phase 2.</p>
+        <p className="text-[12.5px] text-muted">Saving posts an adjusting entry that moves the tax between input tax, pending and the line's cost. Match it with GSTR-2B under GST Filing.</p>
       </div>
     </Dialog>
   );

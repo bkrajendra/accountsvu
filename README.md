@@ -10,6 +10,7 @@
 [![Downloads](https://img.shields.io/github/downloads/bkrajendra/accountsvu/total?color=0A84FF)](https://github.com/bkrajendra/accountsvu/releases)
 [![Platforms](https://img.shields.io/badge/Windows%20%C2%B7%20macOS%20%C2%B7%20Linux-lightgrey)](https://github.com/bkrajendra/accountsvu/releases/latest)
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-green)](LICENSE)
+[![Buy me a coffee](https://img.shields.io/badge/Buy%20me%20a%20coffee-FFDD00?logo=buymeacoffee&logoColor=black)](https://buymeacoffee.com/aszy3yb)
 
 [**Download**](https://github.com/bkrajendra/accountsvu/releases/latest) · [What's next](#whats-next) · [Questions](#questions)
 
@@ -97,7 +98,7 @@ AccountsVU checks for updates itself and asks before installing one.
 
 ## What's next
 
-- **Now:** customer advances, refunds, and a review before filing.
+- **Now:** a review of the GST calculations by a practising GST professional.
 - **Then:** filing returns directly from the app through a GST service provider, in addition to filing on the portal yourself.
 - **Later:** recurring invoices, payment reminders on WhatsApp or email, simple stock, e-invoice and e-way bill, and backups to a cloud folder.
 
@@ -137,3 +138,7 @@ pnpm tauri dev
 ```
 
 The app is built with Tauri, Rust, React and SQLite.
+
+## Support it
+
+AccountsVU is free and will stay free. If it saves you time or a fee every month and you'd like to say thanks, you can [buy me a coffee](https://buymeacoffee.com/aszy3yb). It helps keep the work going.

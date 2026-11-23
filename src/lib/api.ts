@@ -2111,6 +2111,8 @@ export const api = {
     return call<void>("install_update", { onProgress: channel });
   },
   openReleasesPage: () => call<void>("open_releases_page"),
+  /** Opens the Buy Me a Coffee page in the default browser. */
+  openSupportPage: () => call<void>("open_support_page"),
   lockApp: () => call<LockStatus>("lock_app"),
   unlockApp: (pin: string) => call<LockStatus>("unlock_app", { pin }),
   unlockWithRecovery: (code: string) => call<LockStatus>("unlock_with_recovery", { code }),

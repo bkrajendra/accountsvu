@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import clsx from "clsx";
-import { Check, Download, Loader2, RefreshCw } from "lucide-react";
+import { Check, Coffee, Download, ExternalLink, Loader2, RefreshCw } from "lucide-react";
 import { api, keys, runningInTauri } from "../../lib/api";
 import { useTheme, type ThemePreference } from "../../lib/theme";
 import { Badge, Button, Card } from "../../components/ui";
@@ -34,6 +34,18 @@ export function GeneralTab() {
               value={runningInTauri ? <Badge tone="success">Desktop</Badge> : <Badge tone="warning">Browser preview</Badge>}
             />
           </dl>
+        </Card>
+        <Card className="mt-4 flex items-center gap-4 px-5 py-4">
+          <span className="grid size-9 shrink-0 place-items-center rounded-[10px] bg-[#FFDD00] text-[#1d1d1f]">
+            <Coffee size={18} strokeWidth={2} />
+          </span>
+          <div className="min-w-0 flex-1 text-[13.5px]">
+            <div className="font-medium">AccountsVU is free and stays free</div>
+            <div className="text-muted">If it saves you time every month, you can say thanks with a coffee. It helps keep the work going.</div>
+          </div>
+          <Button className="shrink-0" onClick={() => void api.openSupportPage()}>
+            Buy me a coffee <ExternalLink size={13} />
+          </Button>
         </Card>
       </Section>
     </>

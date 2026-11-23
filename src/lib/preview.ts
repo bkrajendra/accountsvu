@@ -3172,6 +3172,9 @@ function hostCommand(command: string, args: Record<string, any>): unknown {
       };
     case "open_releases_page":
       return null;
+    case "open_support_page":
+      window.open("https://buymeacoffee.com/aszy3yb", "_blank", "noopener");
+      return null;
     case "cancel_restore":
       restoreChosen = false;
       restoreChecked = false;
