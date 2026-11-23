@@ -9,12 +9,13 @@ const DOC_COLS: &str = "id, organisation_id, doc_type, status, gst_registration_
     party_gst_type, place_of_supply, supplier_state, supply_kind, reverse_charge, prices_include_tax, payment_mode, \
     original_document_id, reason, notes, taxable_paise, cgst_paise, sgst_paise, utgst_paise, igst_paise, cess_paise, \
     round_off_paise, total_paise, paid_paise, journal_entry_id, cancel_entry_id, cancel_reason, row_version, \
-    created_at, updated_at, recorded_at, cancelled_at, rule_pack_version";
+    created_at, updated_at, recorded_at, cancelled_at, rule_pack_version, tax_override_reason, tax_override_by, \
+    tax_override_at";
 
 const LINE_COLS: &str = "id, document_id, line_no, item_id, account_id, description, hsn_sac, unit, quantity, \
     unit_price_paise, discount_paise, tax_category, gst_rate_bp, cess_rate_bp, amount_paise, taxable_paise, \
     cgst_paise, sgst_paise, utgst_paise, igst_paise, cess_paise, total_paise, itc_status, itc_reason, \
-    itc_eligible_paise, itc_reviewed_at, itc_reviewed_by, itc_common, itc_period";
+    itc_eligible_paise, itc_reviewed_at, itc_reviewed_by, itc_common, itc_period, computed_tax_paise";
 
 const ATT_COLS: &str = "id, organisation_id, entity_type, entity_id, file_name, content_type, size_bytes, sha256, uploaded_at, uploaded_by";
 
@@ -59,6 +60,9 @@ macro_rules! bind_doc {
             .bind(&$d.recorded_at)
             .bind(&$d.cancelled_at)
             .bind(&$d.rule_pack_version)
+            .bind(&$d.tax_override_reason)
+            .bind(&$d.tax_override_by)
+            .bind(&$d.tax_override_at)
     };
 }
 
@@ -106,10 +110,10 @@ impl PurchaseRepo for SqliteUow {
                 supply_kind, reverse_charge, prices_include_tax, payment_mode, original_document_id, reason, notes,
                 taxable_paise, cgst_paise, sgst_paise, utgst_paise, igst_paise, cess_paise, round_off_paise, total_paise,
                 paid_paise, journal_entry_id, cancel_entry_id, cancel_reason, updated_at, recorded_at, cancelled_at,
-                rule_pack_version)
+                rule_pack_version, tax_override_reason, tax_override_by, tax_override_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21,
                 ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42,
-                ?43)",
+                ?43, ?44, ?45, ?46)",
         )
         .bind(&d.id)
         .bind(&d.organisation_id)
@@ -133,7 +137,8 @@ impl PurchaseRepo for SqliteUow {
                 reason = ?25, notes = ?26, taxable_paise = ?27, cgst_paise = ?28, sgst_paise = ?29, utgst_paise = ?30,
                 igst_paise = ?31, cess_paise = ?32, round_off_paise = ?33, total_paise = ?34, paid_paise = ?35,
                 journal_entry_id = ?36, cancel_entry_id = ?37, cancel_reason = ?38, updated_at = ?39,
-                recorded_at = ?40, cancelled_at = ?41, rule_pack_version = ?42, row_version = row_version + 1
+                recorded_at = ?40, cancelled_at = ?41, rule_pack_version = ?42, tax_override_reason = ?43,
+                tax_override_by = ?44, tax_override_at = ?45, row_version = row_version + 1
              WHERE id = ?1 AND organisation_id = ?2 AND row_version = ?3",
         )
         .bind(&d.id)
@@ -157,9 +162,10 @@ impl PurchaseRepo for SqliteUow {
                 "INSERT INTO purchase_line (id, document_id, line_no, item_id, account_id, description, hsn_sac, unit,
                     quantity, unit_price_paise, discount_paise, tax_category, gst_rate_bp, cess_rate_bp, amount_paise,
                     taxable_paise, cgst_paise, sgst_paise, utgst_paise, igst_paise, cess_paise, total_paise, itc_status,
-                    itc_reason, itc_eligible_paise, itc_reviewed_at, itc_reviewed_by, itc_common, itc_period)
+                    itc_reason, itc_eligible_paise, itc_reviewed_at, itc_reviewed_by, itc_common, itc_period,
+                    computed_tax_paise)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20,
-                    ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29)",
+                    ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30)",
             )
             .bind(&l.id)
             .bind(document_id)
@@ -190,6 +196,7 @@ impl PurchaseRepo for SqliteUow {
             .bind(&l.itc_reviewed_by)
             .bind(l.itc_common)
             .bind(&l.itc_period)
+            .bind(l.computed_tax_paise)
             .execute(self.c())
             .await?;
         }

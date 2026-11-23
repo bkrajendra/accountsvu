@@ -23,6 +23,7 @@ use crate::records::{
     AccountTotalsRecord, AgeingDocRecord, BackupLogRecord, BooksLockRecord, FyCloseRecord,
     JournalRowRecord, LogoRecord,
 };
+use crate::records::{AdvanceAdjustmentRecord, AdvanceTaxRecord};
 use crate::records::{GstFilingFileRecord, GstFilingRecord};
 use crate::records::{Gstr2bDecisionRecord, Gstr2bLineRecord, Gstr2bStatementRecord};
 
@@ -538,6 +539,31 @@ pub trait BankingRepo {
         &mut self,
         voucher_id: &str,
     ) -> impl Future<Output = DbResult<Vec<VoucherAllocationRecord>>> + Send;
+    fn insert_advance_tax(
+        &mut self,
+        t: &AdvanceTaxRecord,
+    ) -> impl Future<Output = DbResult<()>> + Send;
+    /// Every taxed advance of the organisation.
+    fn list_advance_taxes(
+        &mut self,
+        org_id: &str,
+    ) -> impl Future<Output = DbResult<Vec<AdvanceTaxRecord>>> + Send;
+    fn insert_advance_adjustment(
+        &mut self,
+        a: &AdvanceAdjustmentRecord,
+    ) -> impl Future<Output = DbResult<()>> + Send;
+    /// Every adjustment of a taxed advance (posted and cancelled), by date.
+    fn list_advance_adjustments(
+        &mut self,
+        org_id: &str,
+    ) -> impl Future<Output = DbResult<Vec<AdvanceAdjustmentRecord>>> + Send;
+    /// Marks a posted adjustment cancelled; `false` if it already was.
+    fn cancel_advance_adjustment(
+        &mut self,
+        org_id: &str,
+        id: &str,
+        cancel_entry_id: &str,
+    ) -> impl Future<Output = DbResult<bool>> + Send;
     /// Allocations of posted (not cancelled) vouchers to a document, with the
     /// voucher each came from.
     fn document_allocations(

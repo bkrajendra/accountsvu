@@ -1,0 +1,89 @@
+{
+  "title": "Receipt voucher",
+  "number": "RV/25-26/0007",
+  "watermark": null,
+  "date": "12 Nov 2026",
+  "rule_note": "Under rule 50 of the CGST Rules",
+  "issuer": {
+    "name": "Khope Traders",
+    "subtitle": "Khope Traders Private Limited",
+    "lines": [
+      "12 MG Road, Kothrud",
+      "Pune 411038, Maharashtra",
+      "GSTIN 27AAPFU0939F1ZV",
+      "accounts@khope.example · 98200 00000"
+    ]
+  },
+  "counterparty_label": "Received from",
+  "counterparty": {
+    "name": "Sahyadri Interiors",
+    "subtitle": null,
+    "lines": [
+      "4 FC Road, Shivajinagar, Pune 411005",
+      "GSTIN 27AAKFS4321M1Z9"
+    ]
+  },
+  "details": [
+    [
+      "Mode",
+      "NEFT"
+    ],
+    [
+      "Reference",
+      "UTR 2026111200042"
+    ],
+    [
+      "Into",
+      "HDFC Bank current account"
+    ]
+  ],
+  "rows": [
+    {
+      "description": "Against invoice INV/25-26/0031 dated 2 Nov 2026",
+      "details": [],
+      "amount": "₹23,600.00"
+    },
+    {
+      "description": "Advance",
+      "details": [
+        "Interior design services, phase 2"
+      ],
+      "amount": "₹11,800.00"
+    }
+  ],
+  "tax": {
+    "heading": "GST on the advance",
+    "place": "Maharashtra (27)",
+    "supply": "Within the state · CGST + SGST",
+    "rows": [
+      [
+        "Rate",
+        "18%"
+      ],
+      [
+        "Taxable value",
+        "₹10,000.00"
+      ],
+      [
+        "CGST @ 9%",
+        "₹900.00"
+      ],
+      [
+        "SGST @ 9%",
+        "₹900.00"
+      ],
+      [
+        "Tax payable on reverse charge",
+        "No"
+      ]
+    ],
+    "total": "₹1,800.00"
+  },
+  "narration": "Interior design services, phase 2",
+  "total": "₹35,400.00",
+  "words": "Rupees thirty-five thousand four hundred only",
+  "sign_for": "For Khope Traders",
+  "signatory": "Rajesh Khope",
+  "logo": "/logo.png",
+  "footer": "Receipt voucher RV/25-26/0007 · Khope Traders"
+}

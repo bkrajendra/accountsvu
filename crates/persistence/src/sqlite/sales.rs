@@ -9,11 +9,11 @@ const DOC_COLS: &str = "id, organisation_id, doc_type, status, gst_registration_
     supplier_state, supply_kind, zero_rated, reverse_charge, prices_include_tax, original_document_id, reason, notes, \
     taxable_paise, cgst_paise, sgst_paise, utgst_paise, igst_paise, cess_paise, round_off_paise, total_paise, \
     paid_paise, journal_entry_id, cancel_entry_id, cancel_reason, row_version, created_at, updated_at, issued_at, \
-    cancelled_at, rule_pack_version";
+    cancelled_at, rule_pack_version, tax_override_reason, tax_override_by, tax_override_at";
 
 const LINE_COLS: &str = "id, document_id, line_no, item_id, description, hsn_sac, unit, quantity, unit_price_paise, \
     discount_paise, tax_category, gst_rate_bp, cess_rate_bp, amount_paise, taxable_paise, cgst_paise, sgst_paise, \
-    utgst_paise, igst_paise, cess_paise, total_paise";
+    utgst_paise, igst_paise, cess_paise, total_paise, computed_tax_paise";
 
 impl SalesRepo for SqliteUow {
     async fn list_sales(&mut self, org_id: &str) -> DbResult<Vec<SalesDocumentRecord>> {
@@ -54,10 +54,10 @@ impl SalesRepo for SqliteUow {
                 prices_include_tax, original_document_id, reason, notes, taxable_paise, cgst_paise, sgst_paise,
                 utgst_paise, igst_paise, cess_paise, round_off_paise, total_paise, paid_paise, journal_entry_id,
                 cancel_entry_id, cancel_reason, row_version, created_at, updated_at, issued_at, cancelled_at,
-                rule_pack_version)
+                rule_pack_version, tax_override_reason, tax_override_by, tax_override_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20,
                 ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41,
-                ?42)",
+                ?42, ?43, ?44, ?45)",
         )
         .bind(&d.id)
         .bind(&d.organisation_id)
@@ -101,6 +101,9 @@ impl SalesRepo for SqliteUow {
         .bind(&d.issued_at)
         .bind(&d.cancelled_at)
         .bind(&d.rule_pack_version)
+        .bind(&d.tax_override_reason)
+        .bind(&d.tax_override_by)
+        .bind(&d.tax_override_at)
         .execute(self.c())
         .await?;
         Ok(())
@@ -120,7 +123,8 @@ impl SalesRepo for SqliteUow {
                 cgst_paise = ?26, sgst_paise = ?27, utgst_paise = ?28, igst_paise = ?29, cess_paise = ?30,
                 round_off_paise = ?31, total_paise = ?32, paid_paise = ?33, journal_entry_id = ?34,
                 cancel_entry_id = ?35, cancel_reason = ?36, updated_at = ?37, issued_at = ?38, cancelled_at = ?39,
-                rule_pack_version = ?40, row_version = row_version + 1
+                rule_pack_version = ?40, tax_override_reason = ?42, tax_override_by = ?43, tax_override_at = ?44,
+                row_version = row_version + 1
              WHERE id = ?1 AND organisation_id = ?2 AND row_version = ?41",
         )
         .bind(&d.id)
@@ -164,6 +168,9 @@ impl SalesRepo for SqliteUow {
         .bind(&d.cancelled_at)
         .bind(&d.rule_pack_version)
         .bind(expected_version)
+        .bind(&d.tax_override_reason)
+        .bind(&d.tax_override_by)
+        .bind(&d.tax_override_at)
         .execute(self.c())
         .await?;
         Ok(r.rows_affected() == 1)
@@ -182,8 +189,10 @@ impl SalesRepo for SqliteUow {
             sqlx::query(
                 "INSERT INTO sales_line (id, document_id, line_no, item_id, description, hsn_sac, unit, quantity,
                     unit_price_paise, discount_paise, tax_category, gst_rate_bp, cess_rate_bp, amount_paise,
-                    taxable_paise, cgst_paise, sgst_paise, utgst_paise, igst_paise, cess_paise, total_paise)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)",
+                    taxable_paise, cgst_paise, sgst_paise, utgst_paise, igst_paise, cess_paise, total_paise,
+                    computed_tax_paise)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21,
+                    ?22)",
             )
             .bind(&l.id)
             .bind(document_id)
@@ -206,6 +215,7 @@ impl SalesRepo for SqliteUow {
             .bind(l.igst_paise)
             .bind(l.cess_paise)
             .bind(l.total_paise)
+            .bind(l.computed_tax_paise)
             .execute(self.c())
             .await?;
         }

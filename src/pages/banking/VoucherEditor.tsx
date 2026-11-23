@@ -3,7 +3,10 @@ import { useQuery } from "@tanstack/react-query";
 import { Link, useNavigate, useSearchParams } from "react-router";
 import clsx from "clsx";
 import { ArrowLeft, Loader2, Wand2 } from "lucide-react";
-import { api, keys, type VoucherInput, type VoucherMode, type VoucherType } from "../../lib/api";
+import { api, keys, type AdvanceTaxInput, type VoucherInput, type VoucherMode, type VoucherPurpose, type VoucherType } from "../../lib/api";
+import { STATES } from "../../lib/gst";
+import { rateLabel } from "../../components/TaxWarnings";
+import { Badge } from "../../components/ui";
 import { formatPaise, paiseToInput } from "../../lib/format";
 import { shortDate, todayIso } from "../../lib/sales";
 import { MODE_LABEL } from "../../lib/banking";
@@ -43,6 +46,11 @@ export function VoucherEditor() {
     narration: params.get("narration") ?? "",
     statementLineId: lineId,
   });
+  const [purpose, setPurpose] = useState<VoucherPurpose>(params.get("purpose") === "refund" ? "refund" : "settlement");
+  const [refundOf, setRefundOf] = useState<string | null>(params.get("refundOf"));
+  // Tax on the part kept as an advance (services).
+  const [taxOn, setTaxOn] = useState(false);
+  const [tax, setTax] = useState<Partial<AdvanceTaxInput>>({});
   // Allocation amounts by document id; `manual` once the user edits one.
   const [alloc, setAlloc] = useState<Record<string, string>>({});
   const [manual, setManual] = useState(false);
@@ -57,11 +65,24 @@ export function VoucherEditor() {
   const money = moneyAccounts.find((m) => m.id === f.moneyAccountId);
 
   const partyId = side === "party" ? f.partyId : undefined;
-  const { data: open = [], isFetching: loadingOpen } = useQuery({
+  const refund = side === "party" && purpose === "refund";
+  const { data: openAll = [], isFetching: loadingOpen } = useQuery({
     queryKey: keys.openDocuments(partyId ?? "", type),
     queryFn: () => api.openDocuments(partyId!, type),
     enabled: !!partyId,
   });
+  const open = refund ? [] : openAll;
+  // A refund gives back an advance that came the other way.
+  const other: VoucherType = type === "receipt" ? "payment" : "receipt";
+  const { data: advances = [] } = useQuery({
+    queryKey: keys.partyAdvances(partyId ?? "", other),
+    queryFn: () => api.partyAdvances(partyId!, other),
+    enabled: !!partyId && refund,
+  });
+  const { data: profile } = useQuery({ queryKey: keys.profile, queryFn: api.businessProfile });
+  const { data: options } = useQuery({ queryKey: keys.itemOptions, queryFn: api.itemOptions, staleTime: Infinity });
+  const activeRegs = profile?.registrations.filter((r) => r.status === "active" && r.registrationType !== "composition") ?? [];
+  const party = parties.find((p) => p.id === partyId);
 
   const amountPaise = inputToPaise(f.amount) ?? 0;
   // Oldest first, until the money runs out.
@@ -89,6 +110,7 @@ export function VoucherEditor() {
     }
   }, [preDoc, open, f.amount]);
 
+  const receipt = type === "receipt";
   const allocatedPaise = open.reduce((a, d) => a + (inputToPaise(shown[d.id]) ?? 0), 0);
   const onAccount = amountPaise - allocatedPaise;
 
@@ -106,10 +128,26 @@ export function VoucherEditor() {
     save.clearError(k);
   };
 
+  const taxable = receipt && side === "party" && purpose === "settlement" && !!partyId && onAccount > 0 && activeRegs.length > 0;
+  const taxInput: AdvanceTaxInput = {
+    registrationId: tax.registrationId ?? activeRegs[0]?.id ?? "",
+    placeOfSupply: tax.placeOfSupply ?? party?.stateCode ?? activeRegs[0]?.stateCode ?? 0,
+    rateBp: tax.rateBp ?? 1800,
+  };
+  const taxReg = activeRegs.find((r) => r.id === taxInput.registrationId);
+  const taxPreview = (() => {
+    if (!taxOn || onAccount <= 0) return 0;
+    const t = Math.round((onAccount * 10000) / (10000 + taxInput.rateBp));
+    return taxReg?.stateCode === taxInput.placeOfSupply ? 2 * Math.round((t * taxInput.rateBp) / 20000) : Math.round((t * taxInput.rateBp) / 10000);
+  })();
+
   const submit = () =>
     save.mutate({
       ...f,
       voucherType: type,
+      purpose: side === "party" ? purpose : "settlement",
+      refundOfId: refund ? (refundOf ?? undefined) : undefined,
+      advanceTax: taxable && taxOn ? taxInput : undefined,
       partyId: side === "party" ? f.partyId || undefined : undefined,
       counterAccountId: side === "account" ? f.counterAccountId || undefined : undefined,
       mode: money?.kind === "cash" ? "cash" : (f.mode ?? "neft"),
@@ -124,8 +162,6 @@ export function VoucherEditor() {
   const ledgerOptions = ledgers
     .filter((a) => a.id !== money?.accountId)
     .map((a) => ({ id: a.id, label: a.name, detail: a.code }));
-  const receipt = type === "receipt";
-
   return (
     <div className="mx-auto max-w-[880px]">
       <Link to="/banking?tab=vouchers" className="mb-2 inline-flex items-center gap-1 text-[13px] text-muted hover:text-fg">
@@ -133,9 +169,9 @@ export function VoucherEditor() {
       </Link>
       <div className="mb-6 flex items-end justify-between gap-4">
         <div>
-          <h1 className="text-display">{receipt ? "Record a receipt" : "Record a payment"}</h1>
+          <h1 className="text-display">{refund ? "Record a refund" : receipt ? "Record a receipt" : "Record a payment"}</h1>
           <p className="mt-1 text-[14px] text-muted">
-            {lineId ? "From a bank statement line — it is reconciled when you save." : receipt ? "Money that came in. Settle invoices, or keep it as an advance." : "Money that went out. Settle bills, or book it to an account."}
+            {lineId ? "From a bank statement line — it is reconciled when you save." : refund ? (receipt ? "Money a supplier paid back to you." : "Money you paid back to a customer.") : receipt ? "Money that came in. Settle invoices, or keep it as an advance." : "Money that went out. Settle bills, or book it to an account."}
           </p>
         </div>
         {!lineId && (
@@ -194,6 +230,21 @@ export function VoucherEditor() {
                 { value: "account", label: "Another account" },
               ]}
             />
+            {side === "party" && (
+              <Segmented<VoucherPurpose>
+                label="Purpose"
+                value={purpose}
+                onChange={(v) => {
+                  setPurpose(v);
+                  setRefundOf(null);
+                  save.clearError("partyId");
+                }}
+                options={[
+                  { value: "settlement", label: receipt ? "Payment received" : "Payment made" },
+                  { value: "refund", label: receipt ? "Refund from a supplier" : "Refund to a customer" },
+                ]}
+              />
+            )}
           </div>
           {side === "party" ? (
             <Field label="Party" error={err.partyId} className="col-span-2">
@@ -234,7 +285,39 @@ export function VoucherEditor() {
         </div>
       </Card>
 
-      {side === "party" && f.partyId && (
+      {refund && f.partyId && (
+        <Card className="mt-5 overflow-hidden">
+          <div className="border-b border-line px-4 py-3">
+            <h2 className="text-[14px] font-semibold">Refund of</h2>
+            <p className="text-[12.5px] text-muted">
+              {receipt ? "The supplier gives back money you paid them in advance." : "You give back money the customer paid in advance."} Link the advance so it shows as used up.
+            </p>
+          </div>
+          <div className="divide-y divide-line text-[13px]">
+            <RefundChoice checked={!refundOf} onChange={() => setRefundOf(null)} label="Not linked to an advance" detail="e.g. a refund of an overpayment or a credit note balance" />
+            {advances.map((a) => (
+              <RefundChoice
+                key={a.voucherId}
+                checked={refundOf === a.voucherId}
+                onChange={() => {
+                  setRefundOf(a.voucherId);
+                  if (!f.amount) set("amount", paiseToInput(a.onAccountPaise));
+                  save.clearError("refundOfId");
+                }}
+                label={<span className="num">{a.number}</span>}
+                detail={`${shortDate(a.voucherDate)} · ${formatPaise(a.onAccountPaise)} left of ${formatPaise(a.amountPaise)}`}
+                badge={a.taxedRegistrationId ? <Badge tone="accent">GST paid</Badge> : null}
+              />
+            ))}
+          </div>
+          {advances.some((a) => a.voucherId === refundOf && a.taxedRegistrationId) && (
+            <p className="border-t border-line px-4 py-2 text-[12.5px] text-muted">The GST paid on the part refunded is taken back (GSTR-1 table 11B).</p>
+          )}
+          {(err.refundOfId || err.allocations) && <p className="border-t border-line px-4 py-2 text-[12.5px] text-danger">{err.refundOfId ?? err.allocations}</p>}
+        </Card>
+      )}
+
+      {side === "party" && f.partyId && !refund && (
         <Card className="mt-5 overflow-hidden">
           <div className="flex items-center justify-between border-b border-line px-4 py-3">
             <div>
@@ -300,13 +383,78 @@ export function VoucherEditor() {
         </Card>
       )}
 
+      {taxable && (
+        <Card className="mt-5 p-4">
+          <label className="flex items-start gap-2.5 text-[13.5px]">
+            <input type="checkbox" className="mt-[3px] size-4 accent-[var(--accent-fill)]" checked={taxOn} onChange={(e) => { setTaxOn(e.target.checked); save.clearError("advanceTax"); }} />
+            <span>
+              Pay GST on the advance of {formatPaise(onAccount)}
+              <span className="block text-[12.5px] text-muted">
+                For services, GST is due when an advance comes in (GSTR-1 table 11A). It is taken back when you adjust the advance against an invoice or refund it. Advances for goods don't need this.
+              </span>
+            </span>
+          </label>
+          {taxOn && (
+            <div className="mt-4 grid grid-cols-3 gap-4">
+              <Field label="GSTIN" error={err["advanceTax.registrationId"]}>
+                {(p) => (
+                  <Select id={p.id} invalid={p.invalid} value={taxInput.registrationId} onChange={(e) => setTax((t) => ({ ...t, registrationId: e.target.value }))}>
+                    {activeRegs.map((r) => (
+                      <option key={r.id} value={r.id}>
+                        {r.gstin}
+                      </option>
+                    ))}
+                  </Select>
+                )}
+              </Field>
+              <Field label="Place of supply" error={err["advanceTax.placeOfSupply"]}>
+                {(p) => (
+                  <Select id={p.id} invalid={p.invalid} value={taxInput.placeOfSupply} onChange={(e) => setTax((t) => ({ ...t, placeOfSupply: Number(e.target.value) }))}>
+                    {STATES.map((st) => (
+                      <option key={st.code} value={st.code}>
+                        {String(st.code).padStart(2, "0")} · {st.name}
+                      </option>
+                    ))}
+                  </Select>
+                )}
+              </Field>
+              <Field label="GST rate" error={err["advanceTax.rateBp"]} hint={taxPreview ? `GST in the advance: ${formatPaise(taxPreview)}` : undefined}>
+                {(p) => (
+                  <Select id={p.id} invalid={p.invalid} value={taxInput.rateBp} onChange={(e) => setTax((t) => ({ ...t, rateBp: Number(e.target.value) }))}>
+                    {(options?.gstRates ?? []).filter((r) => r.basisPoints > 0).map((r) => (
+                      <option key={r.basisPoints} value={r.basisPoints}>
+                        {rateLabel(r, f.voucherDate)}
+                      </option>
+                    ))}
+                  </Select>
+                )}
+              </Field>
+            </div>
+          )}
+          {err.advanceTax && <p className="mt-2 text-[12.5px] text-danger">{err.advanceTax}</p>}
+        </Card>
+      )}
+
       <div className="mt-5 flex justify-end gap-2">
         <Button onClick={() => navigate(-1)}>Cancel</Button>
         <Button variant="primary" disabled={save.isPending} onClick={submit}>
-          {save.isPending && <Loader2 size={15} className="animate-spin" />} {receipt ? "Record receipt" : "Record payment"}
+          {save.isPending && <Loader2 size={15} className="animate-spin" />} {refund ? "Record refund" : receipt ? "Record receipt" : "Record payment"}
         </Button>
       </div>
       {err.statementLineId && <p className="mt-2 text-right text-[12.5px] text-danger">{err.statementLineId}</p>}
     </div>
+  );
+}
+
+function RefundChoice({ checked, onChange, label, detail, badge }: { checked: boolean; onChange: () => void; label: React.ReactNode; detail: string; badge?: React.ReactNode }) {
+  return (
+    <label className={clsx("flex cursor-pointer items-center gap-3 px-4 py-2.5", checked ? "bg-accent-soft" : "hover:bg-hover")}>
+      <input type="radio" name="refund-of" className="size-4 accent-[var(--accent-fill)]" checked={checked} onChange={onChange} />
+      <span className="flex-1">
+        {label}
+        <span className="ml-2 text-[12.5px] text-muted">{detail}</span>
+      </span>
+      {badge}
+    </label>
   );
 }

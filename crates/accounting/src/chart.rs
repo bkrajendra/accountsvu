@@ -44,6 +44,12 @@ pub const DEFAULT_CHART: &[DefaultAccount] = &[
         Asset,
         Some("itc_pending"),
     ),
+    acc(
+        "1220",
+        "GST paid on advances",
+        Asset,
+        Some("gst_on_advances"),
+    ),
     acc("1300", "Inventory", Asset, Some("inventory")),
     acc("1400", "Fixed assets", Asset, Some("fixed_assets")),
     acc("1500", "Advances and deposits", Asset, None),

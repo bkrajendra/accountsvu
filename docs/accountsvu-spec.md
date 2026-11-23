@@ -92,7 +92,7 @@ A single-user local installation can default to Owner. The permission model shou
 - Support B2B and B2C classification, intra/inter-state tax selection, exempt/nil/non-GST items and tax-inclusive pricing.
 - Generate printable PDF with business branding, payment QR/UPI details (optional), bank information and terms.
 - Track draft/issued/part-paid/paid/overdue/cancelled states. Issued documents must not be silently edited; use cancellation or credit/debit notes with an audit trail.
-- Allocate customer receipts to invoices and show overdue ageing.
+- Allocate customer receipts to invoices and show overdue ageing. Money received before an invoice stays on the receipt as an advance; it is adjusted against later invoices or refunded (D25).
 
 ### 5.3 Purchases and expenses
 
@@ -118,6 +118,8 @@ Examples:
 - Sales invoice: Dr Accounts Receivable; Cr Sales; Cr Output CGST/SGST or IGST.
 - Supplier bill: Dr Expense/Inventory/Asset; Dr Eligible Input Tax; Cr Accounts Payable.
 - Receipt: Dr Bank/Cash; Cr Accounts Receivable.
+- Advance for services with GST paid: also Dr GST paid on advances; Cr Output CGST/SGST or IGST. Adjusting it against an invoice or refunding it takes that tax back (D25).
+- Refund to a customer: Dr Accounts Receivable; Cr Bank/Cash. Refund from a supplier: Dr Bank/Cash; Cr Accounts Payable.
 - Supplier payment: Dr Accounts Payable; Cr Bank/Cash.
 - GST payment: Dr GST payable/clearing; Cr Bank/Cash, linked to challan and payment evidence.
 
@@ -142,7 +144,7 @@ Responsibilities:
 | Reverse charge (RCM) | Inward RCM liability (incl. purchases from unregistered persons where notified), self-invoice data, cash-only discharge; outward RCM flag |
 | Input Tax Credit | Eligibility status per line (pending/eligible/ineligible/partial) with reason; blocked credits (s.17(5)); common-credit reversal (rules 42/43) as a workpaper; ITC reversal and reclaim tracking |
 | Credit/debit notes | Tax adjustment linked to the original document; time-limit warnings; effect on returns and ITC |
-| GSTR-1 aggregation | Table mapping (B2B, B2CL, B2CS, CDNR, CDNUR, EXP, NIL, HSN, DOCS) from saved source snapshots |
+| GSTR-1 aggregation | Table mapping (B2B, B2CL, B2CS, CDNR, CDNUR, EXP, NIL, AT, TXPD, HSN, DOCS) from saved source snapshots |
 | GSTR-3B preparation | Sections 3.1, 3.2, 4, 5 and 6.1 working; liability vs ITC offset proposal (cross-utilisation order) |
 | 2B reconciliation | Matching rules and scoring between the purchase register and GSTR-2B lines |
 | Rule versioning | Versioned rule pack with effective-from/to dates and source references (D12); every result records the rule-pack version used |
@@ -154,7 +156,7 @@ Requirements:
 - Provide tax calculation explanation and warnings for missing GSTIN, invalid state code, missing HSN/SAC, unusual rate, place-of-supply ambiguity and incomplete mandatory data.
 - Maintain versioned rate/rule tables with effective-from/effective-to dates, source/notification reference and release identifier.
 - Tax rule updates must be deployable independently from the desktop UI. Never overwrite historic transaction tax snapshots.
-- Include a manual override path with reason, user and timestamp. High-risk overrides should require owner/accountant review.
+- Include a manual override path with reason, user and timestamp. High-risk overrides should require owner/accountant review. (Built in Phase 2.6, D26.)
 
 ### 5.7 GST return preparation and filing
 
@@ -537,6 +539,8 @@ Decisions added on 18 November 2026 (architecture review):
 | D22 | Where GSP calls run | **No hosted gateway for now; personal single-business mode comes first.** Personal mode files through the offline channel; the online channel is optional and uses GSP credentials issued to the taxpayer, kept in the OS credential store. Our own GSP secrets never ship in the desktop binary. Commercial: provider runs in the hosted API. |
 | D23 | GST integration layer | Return centre → **FilingChannel** → *Offline* (versioned portal format adapters in `gst-formats`) or *Online* (`dyn GstProvider` with separate capability traits for filing, 3B workflow, tax payment and e-invoicing). Submission and payment are always separate operations (§5.8). |
 | D24 | HSN/SAC directory | The full HSN/SAC list is a **lookup aid**, separate from the rule pack: synced from the GSTN master (`HSN_SAC.xlsx`, downloaded from one fixed URL or imported as a file) into its own local SQLite file with a full-text index, shared by the install and not backed up. It gives codes and descriptions only; rates and validation stay with the rule pack (D12). Codes dropped from the master are kept and flagged. |
+| D25 | Advances and refunds | What is not allocated on a receipt or payment stays on it as an advance and can be adjusted against later invoices or bills (allocations are dated and immutable) or refunded. A refund is a voucher in the other direction that settles the party's own side (a payment back to a customer debits receivables) and may name the advance it gives back. For services, the user can pay GST on the advance (section 13; goods are exempt by notification 66/2017-CT): GSTR-1 table 11A, posted Dr GST paid on advances / Cr output tax; adjusting or refunding it takes the tax back in proportion, the last part taking the remainder (table 11B). Tax on advances is part of GSTR-3B 3.1(a) and respects the GST month lock. |
+| D26 | Manual tax override | A line's tax may be entered by hand instead of calculated, e.g. to match a supplier's invoice or an agreed figure. The taxable value stays as calculated; only the heads the supply charges may carry tax (CGST and SGST/UTGST, equal, within a state; IGST between states), never more than the value. Every override needs a reason and an owner or accountant, so operators can't save one. The line keeps the calculated tax beside the entered tax, the document records who and when, both are frozen once issued, and returns report the tax as entered. Receipt and refund vouchers print under rules 50 and 51 when GST was paid on the advance. |
 
 Additions adopted into scope: financial-year close and balance carry-forward; Round-off ledger; per-bank statement CSV mapping profiles; a posting idempotency key on documents; a consistent drill-down pattern from every tax figure to source documents; a sample GSTR-2B fixture set for tests.
 

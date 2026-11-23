@@ -8,8 +8,8 @@
 use std::path::PathBuf;
 
 use av_document_render::{
-    InvoiceData, InvoiceLine, Logo, LogoFormat, PartyBlock, invoice_page_count, invoice_view_json,
-    render_invoice,
+    InvoiceData, InvoiceLine, Logo, LogoFormat, PartyBlock, VoucherData, VoucherRow, VoucherTax,
+    invoice_page_count, invoice_view_json, render_invoice, render_voucher, voucher_view_json,
 };
 use sha2::{Digest, Sha256};
 
@@ -26,19 +26,34 @@ fn out_dir() -> PathBuf {
 fn check(name: &str, data: &InvoiceData) {
     let view = invoice_view_json(data);
     let pdf = render_invoice(data).expect("renders");
-    assert!(pdf.starts_with(b"%PDF-"), "{name}: not a PDF");
     assert_eq!(
         pdf,
         render_invoice(data).expect("renders"),
         "{name}: output is not deterministic"
     );
-    let hash = format!("{:x}\n", Sha256::digest(&pdf));
-    std::fs::write(out_dir().join(format!("{name}.pdf")), &pdf).expect("write pdf");
+    compare(name, &view, &pdf);
+}
+
+fn check_voucher(name: &str, data: &VoucherData) {
+    let view = voucher_view_json(data);
+    let pdf = render_voucher(data).expect("renders");
+    assert_eq!(
+        pdf,
+        render_voucher(data).expect("renders"),
+        "{name}: output is not deterministic"
+    );
+    compare(name, &view, &pdf);
+}
+
+fn compare(name: &str, view: &str, pdf: &[u8]) {
+    assert!(pdf.starts_with(b"%PDF-"), "{name}: not a PDF");
+    let hash = format!("{:x}\n", Sha256::digest(pdf));
+    std::fs::write(out_dir().join(format!("{name}.pdf")), pdf).expect("write pdf");
 
     let view_path = dir().join(format!("{name}.json"));
     let hash_path = dir().join(format!("{name}.pdf.sha256"));
     if std::env::var_os("UPDATE_GOLDEN").is_some() {
-        std::fs::write(&view_path, &view).expect("write view golden");
+        std::fs::write(&view_path, view).expect("write view golden");
         std::fs::write(&hash_path, &hash).expect("write hash golden");
         return;
     }
@@ -264,4 +279,115 @@ fn text_from_data_is_never_markup() {
     d.buyer.name = "#set page(paper: \"a0\") *bold* $x^2$ <label> @ref #panic()".into();
     d.notes = Some("]) #include \"/etc/passwd\"".into());
     assert_eq!(invoice_page_count(&d).expect("plain text renders"), 1);
+}
+
+fn customer() -> PartyBlock {
+    PartyBlock {
+        name: "Sahyadri Interiors".into(),
+        address_lines: vec!["4 FC Road, Shivajinagar, Pune 411005".into()],
+        gstin: Some("27AAKFS4321M1Z9".into()),
+        ..PartyBlock::default()
+    }
+}
+
+#[test]
+fn receipt_voucher_with_gst_on_the_advance() {
+    // ₹11,800 advance for services at 18% within the state: ₹10,000 + ₹900 + ₹900.
+    let d = VoucherData {
+        title: "Receipt voucher".into(),
+        number: "RV/25-26/0007".into(),
+        date: "12 Nov 2026".into(),
+        issuer: seller(),
+        counterparty_label: "Received from".into(),
+        counterparty: customer(),
+        details: vec![
+            ("Mode".into(), "NEFT".into()),
+            ("Reference".into(), "UTR 2026111200042".into()),
+            ("Into".into(), "HDFC Bank current account".into()),
+        ],
+        rows: vec![
+            VoucherRow {
+                description: "Against invoice INV/25-26/0031 dated 2 Nov 2026".into(),
+                details: vec![],
+                amount_paise: 2_360_000,
+            },
+            VoucherRow {
+                description: "Advance".into(),
+                details: vec!["Interior design services, phase 2".into()],
+                amount_paise: 1_180_000,
+            },
+        ],
+        tax: Some(VoucherTax {
+            heading: "GST on the advance".into(),
+            place_of_supply: "Maharashtra (27)".into(),
+            supply_note: "Within the state · CGST + SGST".into(),
+            rate_bp: 1800,
+            taxable_paise: 1_000_000,
+            cgst_paise: 90_000,
+            sgst_paise: 90_000,
+            ..VoucherTax::default()
+        }),
+        narration: Some("Interior design services, phase 2".into()),
+        amount_paise: 3_540_000,
+        rule_note: Some("Under rule 50 of the CGST Rules".into()),
+        signatory: Some("Rajesh Khope".into()),
+        logo: Some(Logo {
+            bytes: std::fs::read(
+                PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/logo.png"),
+            )
+            .expect("logo fixture"),
+            format: LogoFormat::Png,
+        }),
+        ..VoucherData::default()
+    };
+    let view = voucher_view_json(&d);
+    assert!(view.contains("CGST @ 9%"));
+    assert!(view.contains("Tax payable on reverse charge"));
+    check_voucher("receipt_voucher_advance_tax", &d);
+}
+
+#[test]
+fn cancelled_refund_voucher_names_the_receipt_voucher() {
+    let d = VoucherData {
+        title: "Refund voucher".into(),
+        number: "PV/25-26/0012".into(),
+        cancelled: true,
+        date: "18 Nov 2026".into(),
+        issuer: seller(),
+        counterparty_label: "Paid to".into(),
+        counterparty: PartyBlock {
+            name: "Deccan Hardware LLP".into(),
+            address_lines: vec!["Plot 7, Peenya Industrial Area, Bengaluru 560058".into()],
+            gstin: Some("29AAACD1234E1Z2".into()),
+            ..PartyBlock::default()
+        },
+        details: vec![
+            (
+                "Receipt voucher".into(),
+                "RV/25-26/0009 dated 10 Nov 2026".into(),
+            ),
+            ("Mode".into(), "Cheque".into()),
+        ],
+        rows: vec![VoucherRow {
+            description: "Refund of advance RV/25-26/0009".into(),
+            details: vec![],
+            amount_paise: 590_000,
+        }],
+        tax: Some(VoucherTax {
+            heading: "GST paid on the advance refunded".into(),
+            place_of_supply: "Karnataka (29)".into(),
+            supply_note: "Between states · IGST".into(),
+            rate_bp: 1800,
+            taxable_paise: 500_000,
+            igst_paise: 90_000,
+            ..VoucherTax::default()
+        }),
+        amount_paise: 590_000,
+        rule_note: Some("Under rule 51 of the CGST Rules".into()),
+        ..VoucherData::default()
+    };
+    let view = voucher_view_json(&d);
+    assert!(view.contains("IGST @ 18%"));
+    assert!(view.contains("CANCELLED"));
+    check_voucher("refund_voucher_cancelled", &d);
 }

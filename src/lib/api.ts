@@ -521,6 +521,10 @@ export interface SalesDocument {
   cancelledAt: string | null;
   /** GST rule pack the tax was computed with; null before Phase 2.1. */
   rulePackVersion: string | null;
+  /** Manual tax override: why, who and when (set when any line's tax was entered by hand). */
+  taxOverrideReason: string | null;
+  taxOverrideBy: string | null;
+  taxOverrideAt: string | null;
 }
 
 export interface SalesLine {
@@ -545,6 +549,8 @@ export interface SalesLine {
   igstPaise: number;
   cessPaise: number;
   totalPaise: number;
+  /** Set when the tax was entered by hand: the tax as calculated. */
+  computedTaxPaise: number | null;
 }
 
 export interface SalesSummary extends SalesDocument {
@@ -580,6 +586,16 @@ export interface SalesLineInput {
   taxCategory: TaxCategory;
   gstRate?: string;
   cessRate?: string;
+  /** Tax entered by hand instead of calculated (owner or accountant). */
+  taxOverride?: TaxOverrideInput;
+}
+
+/** Tax heads typed for one line, in rupees; `sgst` is SGST or UTGST. */
+export interface TaxOverrideInput {
+  cgst?: string;
+  sgst?: string;
+  igst?: string;
+  cess?: string;
 }
 
 export interface SalesDocumentInput {
@@ -595,6 +611,8 @@ export interface SalesDocumentInput {
   reason?: string;
   notes?: string;
   lines: SalesLineInput[];
+  /** Why any line's tax was entered by hand. */
+  taxOverrideReason?: string;
 }
 
 export interface LineCalc {
@@ -606,6 +624,8 @@ export interface LineCalc {
   igstPaise: number;
   cessPaise: number;
   totalPaise: number;
+  /** Set when the tax was entered by hand: the tax as calculated. */
+  computedTaxPaise: number | null;
 }
 
 export interface TotalsCalc {
@@ -684,6 +704,10 @@ export interface PurchaseDocument {
   recordedAt: string | null;
   cancelledAt: string | null;
   rulePackVersion: string | null;
+  /** Manual tax override: why, who and when (set when any line's tax was entered by hand). */
+  taxOverrideReason: string | null;
+  taxOverrideBy: string | null;
+  taxOverrideAt: string | null;
 }
 
 export interface PurchaseLine {
@@ -718,6 +742,8 @@ export interface PurchaseLine {
   itcCommon: boolean;
   /** YYYY-MM the ITC is claimed in when reviewed after that month's GSTR-3B was filed. */
   itcPeriod: string | null;
+  /** Set when the tax was entered by hand: the tax as calculated. */
+  computedTaxPaise: number | null;
 }
 
 export interface PurchaseSummary extends PurchaseDocument {
@@ -772,6 +798,8 @@ export interface PurchaseLineInput {
   itcReason?: string;
   itcEligible?: string;
   itcCommon?: boolean;
+  /** Tax entered by hand, e.g. as on the supplier's invoice. */
+  taxOverride?: TaxOverrideInput;
 }
 
 export interface PurchaseDocumentInput {
@@ -789,6 +817,8 @@ export interface PurchaseDocumentInput {
   reason?: string;
   notes?: string;
   lines: PurchaseLineInput[];
+  /** Why any line's tax was entered by hand. */
+  taxOverrideReason?: string;
 }
 
 export interface PurchaseCalculation {
@@ -902,6 +932,56 @@ export interface VoucherInput {
   narration?: string;
   allocations: AllocationInput[];
   statementLineId?: string;
+  /** `refund`: a payment back to a customer, or a receipt back from a supplier. */
+  purpose?: VoucherPurpose;
+  /** The advance a refund gives back. */
+  refundOfId?: string;
+  /** Pay GST on the part of a receipt left as an advance (services). */
+  advanceTax?: AdvanceTaxInput;
+}
+
+export type VoucherPurpose = "settlement" | "refund";
+
+export interface AdvanceTaxInput {
+  registrationId: string;
+  placeOfSupply: number;
+  rateBp: number;
+}
+
+export interface AdjustAdvanceInput {
+  date: string;
+  allocations: AllocationInput[];
+}
+
+export interface AdvanceTaxView {
+  registrationId: string;
+  gstin: string;
+  placeOfSupply: number;
+  placeName: string;
+  rateBp: number;
+  grossPaise: number;
+  taxablePaise: number;
+  taxPaise: number;
+  remainingTaxPaise: number;
+}
+
+export interface AdvanceAdjustmentView {
+  id: string;
+  reason: "invoice" | "refund";
+  adjustDate: string;
+  grossPaise: number;
+  taxPaise: number;
+  status: "posted" | "cancelled";
+}
+
+/** A receipt or payment of a party with something still on account. */
+export interface PartyAdvance {
+  voucherId: string;
+  number: string;
+  voucherDate: string;
+  amountPaise: number;
+  onAccountPaise: number;
+  taxedRegistrationId: string | null;
 }
 
 export interface VoucherSummary {
@@ -917,6 +997,7 @@ export interface VoucherSummary {
   amountPaise: number;
   mode: VoucherMode;
   reference: string | null;
+  purpose: VoucherPurpose;
 }
 
 export interface AllocationView {
@@ -925,6 +1006,8 @@ export interface AllocationView {
   number: string | null;
   docDate: string | null;
   amountPaise: number;
+  /** Set when an advance was adjusted after the voucher. */
+  allocatedOn: string | null;
 }
 
 export interface VoucherView {
@@ -954,10 +1037,17 @@ export interface VoucherView {
   moneyAccountKind: MoneyAccountKind;
   partyName: string | null;
   counterAccountName: string | null;
+  purpose: VoucherPurpose;
+  refundOfId: string | null;
   allocations: AllocationView[];
   allocatedPaise: number;
   onAccountPaise: number;
   statementLineId: string | null;
+  refunds: Settlement[];
+  refundedPaise: number;
+  refundOfNumber: string | null;
+  advanceTax: AdvanceTaxView | null;
+  advanceAdjustments: AdvanceAdjustmentView[];
 }
 
 export interface Settlement {
@@ -1437,7 +1527,7 @@ export interface ReturnCentre {
   periods: ReturnPeriod[];
 }
 
-export type ReturnSectionKey = "b2b" | "b2cl" | "exp" | "b2cs" | "nil" | "cdnr" | "cdnur" | "hsn" | "docs";
+export type ReturnSectionKey = "b2b" | "b2cl" | "exp" | "b2cs" | "nil" | "cdnr" | "cdnur" | "at" | "atadj" | "hsn" | "docs";
 
 export interface ReturnSection {
   key: ReturnSectionKey;
@@ -1479,6 +1569,17 @@ export interface B2csRow {
   rateBp: number;
   totals: TaxTotals;
   documents: ReturnDocLink[];
+}
+
+/** Tax on advances: received (table 11A) or adjusted/refunded (11B). */
+export interface AdvanceRow {
+  table: "11A" | "11B";
+  placeOfSupply: number;
+  placeName: string;
+  intraState: boolean;
+  rateBp: number;
+  totals: TaxTotals;
+  vouchers: ReturnDocLink[];
 }
 
 export interface NilRow {
@@ -1536,6 +1637,9 @@ export interface Gstr1 {
   hsn: HsnRow[];
   series: DocSeriesRow[];
   exceptions: ReturnException[];
+  advances: AdvanceRow[];
+  /** 11A less 11B: added to GSTR-3B 3.1(a). */
+  advanceTotals: TaxTotals;
 }
 
 /** Amounts per tax head; SGST includes UTGST. */
@@ -1911,6 +2015,9 @@ export const api = {
   documentSettlements: (documentKind: "sales" | "purchase", documentId: string) =>
     call<Settlement[]>("document_settlements", { documentKind, documentId }),
   createVoucher: (input: VoucherInput) => call<VoucherView>("create_voucher", { input }),
+  adjustAdvance: (id: string, input: AdjustAdvanceInput) => call<VoucherView>("adjust_advance", { id, input }),
+  partyAdvances: (partyId: string, voucherType: VoucherType) =>
+    call<PartyAdvance[]>("party_advances", { partyId, voucherType }),
   cancelVoucher: (id: string, reason: string, expectedVersion: number) =>
     call<VoucherView>("cancel_voucher", { id, reason, expectedVersion }),
   moneyBook: (moneyAccountId: string, from?: string, to?: string) =>
@@ -1976,6 +2083,9 @@ export const api = {
   saveSalesPdf: (id: string) => call<SavedFile | null>("save_sales_pdf", { id }),
   /** Opens the PDF in the default viewer, e.g. to print. */
   openSalesPdf: (id: string) => call<null>("open_sales_pdf", { id }),
+  /** Receipt, payment or refund voucher PDF (rules 50 and 51 when GST was paid on an advance). */
+  saveVoucherPdf: (id: string) => call<SavedFile | null>("save_voucher_pdf", { id }),
+  openVoucherPdf: (id: string) => call<null>("open_voucher_pdf", { id }),
   /** Shows a file this session saved in its folder. */
   openSavedFile: (path: string) => call<null>("open_saved_file", { path }),
 
@@ -2033,6 +2143,7 @@ export const keys = {
   vouchers: ["vouchers"] as const,
   voucher: (id: string) => ["vouchers", id] as const,
   openDocuments: (partyId: string, type: string) => ["openDocuments", partyId, type] as const,
+  partyAdvances: (partyId: string, type: string) => ["partyAdvances", partyId, type] as const,
   settlements: (kind: string, id: string) => ["settlements", kind, id] as const,
   moneyBook: (id: string, from: string, to: string) => ["moneyBook", id, from, to] as const,
   reconciliation: (id: string) => ["reconciliation", id] as const,

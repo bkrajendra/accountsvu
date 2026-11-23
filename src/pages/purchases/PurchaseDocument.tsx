@@ -14,6 +14,7 @@ import { Dialog } from "../../components/Dialog";
 import { ChoiceCards, Field, TextInput } from "../../components/form";
 import { AttachmentsPanel } from "../../components/Attachments";
 import { SettlementsCard } from "../banking/Settlements";
+import { TaxOverrideNote } from "../../components/TaxOverride";
 
 const tax = (l: PurchaseLine) => l.cgstPaise + l.sgstPaise + l.utgstPaise + l.igstPaise + l.cessPaise;
 
@@ -167,6 +168,7 @@ export function PurchaseDocument() {
         </div>
 
         <div className="space-y-4">
+          <TaxOverrideNote doc={doc} />
           {doc.status === "cancelled" && (
             <Card className="p-4 text-[13px]">
               <div className="font-semibold">Cancelled {shortDate(doc.cancelledAt?.slice(0, 10))}</div>

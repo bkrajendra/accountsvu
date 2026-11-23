@@ -19,7 +19,7 @@ use av_gst_engine::checks::{
     gstr1_placement, line_warnings, place_of_supply_warning,
 };
 use av_gst_engine::invoice::{LineInput, Supply, compute_document, line_amount};
-use av_gst_engine::{RulePack, SupplyKind, TaxRate};
+use av_gst_engine::{RulePack, SupplyKind, TaxRate, document_totals};
 use av_persistence::records::{
     OrganisationRecord, PartyRecord, RegistrationRecord, SalesDocumentRecord, SalesLineRecord,
 };
@@ -36,6 +36,7 @@ use crate::error::{AppError, AppResult, Errors};
 use crate::masters::{parse_amount, parse_rate};
 use crate::posting::{PostLine, Posting, post};
 use crate::setup::{Change, audit, check_len, clean, json};
+use crate::tax_override::{self, TaxOverrideInput};
 
 const OTHER_COUNTRY: i64 = 96;
 
@@ -67,6 +68,9 @@ pub struct SalesLineInput {
     pub gst_rate: Option<String>,
     #[serde(default)]
     pub cess_rate: Option<String>,
+    /// Tax entered by hand instead of calculated (owner or accountant).
+    #[serde(default)]
+    pub tax_override: Option<TaxOverrideInput>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -99,6 +103,9 @@ pub struct SalesDocumentInput {
     pub notes: Option<String>,
     #[serde(default)]
     pub lines: Vec<SalesLineInput>,
+    /// Why any line's tax was entered by hand.
+    #[serde(default)]
+    pub tax_override_reason: Option<String>,
 }
 
 /// Status as the user sees it.
@@ -180,6 +187,8 @@ pub struct LineCalc {
     pub igst_paise: i64,
     pub cess_paise: i64,
     pub total_paise: i64,
+    /// Set when the tax was entered by hand: the tax as calculated.
+    pub computed_tax_paise: Option<i64>,
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -377,15 +386,16 @@ pub(crate) fn display_status(
 }
 
 impl<S: Store> AppCore<S> {
-    /// Validate a document and compute its tax. `strict` adds the rules that
-    /// only matter when issuing (dates not in the future, credit limits of a
-    /// credit note). Returns field errors and, when valid, the records.
+    /// Validate a document and compute its tax. Returns field errors and,
+    /// when valid, the records. `ctx` is `None` for live figures, which
+    /// ignore problems with tax entered by hand.
     async fn prepare(
         &self,
         uow: &mut S::Uow,
         org: &OrganisationRecord,
         input: &SalesDocumentInput,
         self_id: Option<&str>,
+        ctx: Option<&RequestContext>,
     ) -> AppResult<(Errors, Option<Prepared>)> {
         let mut e = Errors::new("");
         let today = self.today();
@@ -707,6 +717,7 @@ impl<S: Store> AppCore<S> {
                         igst_paise: 0,
                         cess_paise: 0,
                         total_paise: 0,
+                        computed_tax_paise: None,
                     });
                 }
             }
@@ -733,17 +744,38 @@ impl<S: Store> AppCore<S> {
             compute_document(&engine_lines, supply, org.round_to_rupee).map_err(|errs| {
                 AppError::Invalid(format!("line {} could not be computed", errs[0].0 + 1))
             })?;
-        for (rec, c) in line_records.iter_mut().zip(&computed.lines) {
+        // Every line is valid here, so records line up with the input.
+        let mut oe = Errors::new("");
+        let mut taxes = Vec::with_capacity(line_records.len());
+        for (k, (rec, c)) in line_records.iter_mut().zip(&computed.lines).enumerate() {
+            let entered = input.lines.get(k).and_then(|l| l.tax_override.as_ref());
+            let (tax, calculated) = tax_override::apply(&mut oe, k, entered, c.tax, kind);
             rec.amount_paise = to_paise(c.amount);
-            rec.taxable_paise = to_paise(c.tax.taxable_value);
-            rec.cgst_paise = to_paise(c.tax.cgst);
-            rec.sgst_paise = to_paise(c.tax.sgst);
-            rec.utgst_paise = to_paise(c.tax.utgst);
-            rec.igst_paise = to_paise(c.tax.igst);
-            rec.cess_paise = to_paise(c.tax.cess);
-            rec.total_paise = to_paise(c.tax.line_total());
+            rec.taxable_paise = to_paise(tax.taxable_value);
+            rec.cgst_paise = to_paise(tax.cgst);
+            rec.sgst_paise = to_paise(tax.sgst);
+            rec.utgst_paise = to_paise(tax.utgst);
+            rec.igst_paise = to_paise(tax.igst);
+            rec.cess_paise = to_paise(tax.cess);
+            rec.total_paise = to_paise(tax.line_total());
+            rec.computed_tax_paise = calculated;
+            taxes.push(tax);
         }
-        let tt = computed.totals;
+        let tt = document_totals(&taxes, org.round_to_rupee);
+        let changed = line_records.iter().any(|l| l.computed_tax_paise.is_some());
+        let (override_reason, override_by, override_at) = match ctx {
+            Some(ctx) => {
+                e.absorb(oe);
+                tax_override::stamp(
+                    &mut e,
+                    ctx,
+                    changed,
+                    &input.tax_override_reason,
+                    &self.now(),
+                )
+            }
+            None => (None, None, None),
+        };
         let total_paise = to_paise(tt.grand_total);
         if total_paise <= 0 {
             e.add("lines", "The total must be more than zero.");
@@ -819,6 +851,9 @@ impl<S: Store> AppCore<S> {
             issued_at: None,
             cancelled_at: None,
             rule_pack_version: Some(RulePack::bundled().version.clone()),
+            tax_override_reason: override_reason,
+            tax_override_by: override_by,
+            tax_override_at: override_at,
         };
         let warnings = review(&doc, p, original.as_ref(), &line_facts);
         let gstr1 = gstr1_of(&doc, &line_records, original.as_ref());
@@ -843,7 +878,7 @@ impl<S: Store> AppCore<S> {
         ctx.require(Permission::ViewBusiness)?;
         let mut uow = self.store.begin().await?;
         let org = self.require_org(ctx, &mut uow).await?;
-        let (_, prepared) = self.prepare(&mut uow, &org, &input, None).await?;
+        let (_, prepared) = self.prepare(&mut uow, &org, &input, None, None).await?;
         if let Some(p) = prepared {
             let number_preview = self.number_preview(&mut uow, &org, &p.doc).await?;
             let d = &p.doc;
@@ -864,6 +899,7 @@ impl<S: Store> AppCore<S> {
                             igst_paise: l.igst_paise,
                             cess_paise: l.cess_paise,
                             total_paise: l.total_paise,
+                            computed_tax_paise: l.computed_tax_paise,
                         })
                     })
                     .collect(),
@@ -950,6 +986,7 @@ impl<S: Store> AppCore<S> {
                     igst_paise: to_paise(t.igst),
                     cess_paise: to_paise(t.cess),
                     total_paise: to_paise(t.line_total()),
+                    computed_tax_paise: None,
                 })
             })();
             if let Some(c) = &calc {
@@ -1167,7 +1204,7 @@ impl<S: Store> AppCore<S> {
         ctx.require(Permission::PrepareDocuments)?;
         let mut uow = self.store.begin().await?;
         let org = self.require_org(ctx, &mut uow).await?;
-        let (e, prepared) = self.prepare(&mut uow, &org, &input, id).await?;
+        let (e, prepared) = self.prepare(&mut uow, &org, &input, id, Some(ctx)).await?;
         e.finish()?;
         let doc = self
             .write_draft(
@@ -1196,7 +1233,7 @@ impl<S: Store> AppCore<S> {
         ctx.require(Permission::PostDocuments)?;
         let mut uow = self.store.begin().await?;
         let org = self.require_org(ctx, &mut uow).await?;
-        let (mut e, prepared) = self.prepare(&mut uow, &org, &input, id).await?;
+        let (mut e, prepared) = self.prepare(&mut uow, &org, &input, id, Some(ctx)).await?;
         if let Some(p) = &prepared
             && let Some(lock) = self
                 .gst_lock(

@@ -36,7 +36,7 @@ fn series(id: &str, org: &str, doc: &str, prefix: &str) -> SeriesRecord {
 #[tokio::test]
 async fn migrates_and_reports_version() {
     let store = store_with_orgs(&[]).await;
-    assert_eq!(store.schema_version().await.unwrap(), 12);
+    assert_eq!(store.schema_version().await.unwrap(), 14);
     let mut u = store.begin().await.unwrap();
     assert_eq!(u.organisation_count().await.unwrap(), 0);
     assert_eq!(
@@ -244,7 +244,7 @@ async fn snapshot_writes_a_checkable_copy() {
     assert!(dest.exists(), "snapshot file missing at {}", dest.display());
     let check = crate::sqlite::inspect_database(&dest).await.unwrap();
     assert!(check.is_sound());
-    assert_eq!(check.schema_version, 12);
+    assert_eq!(check.schema_version, 14);
     assert!(store.snapshot(&dest).await.is_err(), "never overwrites");
     let memory = SqliteStore::open_in_memory().await.unwrap();
     assert!(memory.snapshot(&dir.join("mem.sqlite3")).await.is_err());

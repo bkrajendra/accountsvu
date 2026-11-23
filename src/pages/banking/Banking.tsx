@@ -222,6 +222,7 @@ function VoucherList({ vouchers }: { vouchers: VoucherSummary[] }) {
                   <td className="px-4 py-2.5">
                     <span className={clsx("num", cancelled && "line-through")}>{v.number}</span>
                     {cancelled && <span className="ml-2"><Badge>Cancelled</Badge></span>}
+                    {v.purpose === "refund" && <span className="ml-2"><Badge tone="accent">Refund</Badge></span>}
                   </td>
                   <td className="px-4 py-2.5">{v.counterparty}</td>
                   <td className="px-4 py-2.5 text-muted">

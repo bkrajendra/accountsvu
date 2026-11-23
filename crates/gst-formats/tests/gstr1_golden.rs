@@ -172,6 +172,17 @@ fn sample() -> Gstr1Return {
                 cancelled: 1,
             },
         ],
+        // ₹11,800 advance at 18% intra-state; ₹5,900 of an earlier one adjusted.
+        at: vec![AdvanceRow {
+            pos: 27,
+            intra_state: true,
+            items: vec![item(1800, 1_000_000, 0, 90_000, 90_000)],
+        }],
+        txpd: vec![AdvanceRow {
+            pos: 29,
+            intra_state: false,
+            items: vec![item(1800, 500_000, 90_000, 0, 0)],
+        }],
     }
 }
 
@@ -201,6 +212,8 @@ fn full_return_matches_golden_file() {
         "grouped by recipient GSTIN"
     );
     assert!(json.contains("\"txval\": 2000.50"));
+    assert_eq!(v["at"][0]["sply_ty"], "INTRA");
+    assert!(json.contains("\"ad_amt\": 10000"));
     check("gstr1_full.json", &json);
 }
 

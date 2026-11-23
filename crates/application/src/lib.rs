@@ -3,6 +3,7 @@
 //! the persistence *traits*, never on a database engine (D20), and take a
 //! [`RequestContext`] saying who is acting on which organisation.
 
+pub mod advances;
 pub mod backup;
 pub mod banking;
 mod context;
@@ -22,6 +23,7 @@ pub mod returns;
 pub mod sales;
 pub mod security;
 pub mod setup;
+pub mod tax_override;
 mod workpaper_xlsx;
 
 pub use banking::{

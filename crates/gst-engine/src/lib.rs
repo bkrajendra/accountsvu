@@ -109,6 +109,99 @@ pub fn compute_line_tax(taxable: Money, rate: TaxRate, cess: TaxRate, kind: Supp
     t
 }
 
+/// The tax inside an amount that already includes GST, such as an advance
+/// received for a supply not yet invoiced (GSTR-1 table 11). Each head is
+/// worked out as on an invoice line, and the taxable value is whatever is
+/// left, so taxable value plus tax always equals `gross` to the paisa.
+pub fn tax_in_gross(gross: Money, rate: TaxRate, kind: SupplyKind) -> LineTax {
+    let gross = gross.round_paise();
+    let taxable = Money::new(
+        gross.amount() * Decimal::from(10_000) / Decimal::from(10_000 + u64::from(rate.0)),
+    );
+    let mut t = compute_line_tax(taxable, rate, TaxRate(0), kind);
+    t.taxable_value = gross - t.total_tax();
+    t
+}
+
+/// Tax heads entered by hand for one line (spec §5.6). `state` is SGST, or
+/// UTGST in a union territory.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct EnteredTax {
+    pub cgst: Money,
+    pub state: Money,
+    pub igst: Money,
+    pub cess: Money,
+}
+
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum OverrideError {
+    #[error("This line carries no GST, so there is no tax to change.")]
+    NotTaxed,
+    #[error("Tax can't be negative.")]
+    Negative,
+    #[error("A supply within the state is taxed as CGST and SGST, not IGST.")]
+    IgstWithinState,
+    #[error("A supply between states is taxed as IGST, not CGST and SGST.")]
+    SplitBetweenStates,
+    #[error("CGST and SGST must be equal.")]
+    UnequalHalves,
+    #[error("The tax can't be more than the taxable value.")]
+    MoreThanValue,
+}
+
+/// A line's tax as entered by hand instead of calculated (spec §5.6). The
+/// taxable value stays as calculated; only the heads the supply charges may
+/// carry tax, and the two halves of an intra-state split stay equal.
+pub fn override_line_tax(
+    computed: LineTax,
+    kind: SupplyKind,
+    entered: EnteredTax,
+) -> Result<LineTax, OverrideError> {
+    if computed.total_tax().is_zero() {
+        return Err(OverrideError::NotTaxed);
+    }
+    let EnteredTax {
+        cgst,
+        state,
+        igst,
+        cess,
+    } = entered;
+    if [cgst, state, igst, cess].iter().any(Money::is_negative) {
+        return Err(OverrideError::Negative);
+    }
+    let mut t = LineTax {
+        taxable_value: computed.taxable_value,
+        cess,
+        ..LineTax::default()
+    };
+    match kind {
+        SupplyKind::InterState => {
+            if !(cgst.is_zero() && state.is_zero()) {
+                return Err(OverrideError::SplitBetweenStates);
+            }
+            t.igst = igst;
+        }
+        SupplyKind::IntraState | SupplyKind::IntraUnionTerritory => {
+            if !igst.is_zero() {
+                return Err(OverrideError::IgstWithinState);
+            }
+            if cgst != state {
+                return Err(OverrideError::UnequalHalves);
+            }
+            t.cgst = cgst;
+            if kind == SupplyKind::IntraState {
+                t.sgst = state;
+            } else {
+                t.utgst = state;
+            }
+        }
+    }
+    if t.total_tax().amount() > t.taxable_value.amount() {
+        return Err(OverrideError::MoreThanValue);
+    }
+    Ok(t)
+}
+
 /// Document totals with rupee round-off (D11).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DocumentTotals {
@@ -153,6 +246,26 @@ mod tests {
 
     fn st(c: u8) -> StateCode {
         StateCode::new(c).unwrap()
+    }
+
+    #[test]
+    fn tax_in_gross_adds_back_to_the_amount() {
+        let t = tax_in_gross(
+            Money::from_rupees(11_800),
+            TaxRate::percent(18),
+            SupplyKind::IntraState,
+        );
+        assert_eq!(t.cgst, Money::from_rupees(900));
+        assert_eq!(t.sgst, Money::from_rupees(900));
+        assert_eq!(t.taxable_value, Money::from_rupees(10_000));
+        // An awkward amount still adds back exactly.
+        let t = tax_in_gross(
+            Money::from_paise(1_001),
+            TaxRate::percent(18),
+            SupplyKind::InterState,
+        );
+        assert_eq!(t.line_total(), Money::from_paise(1_001));
+        assert_eq!(t.igst, Money::from_paise(153));
     }
 
     #[test]
@@ -248,5 +361,79 @@ mod tests {
         assert_eq!(d.round_off.amount(), dec!(-0.29));
         let d = document_totals([&a], false);
         assert_eq!(d.round_off, Money::ZERO);
+    }
+
+    #[test]
+    fn hand_entered_tax_keeps_to_the_supply() {
+        let calc = compute_line_tax(
+            Money::from_paise(100_050),
+            TaxRate::percent(18),
+            TaxRate(0),
+            SupplyKind::IntraState,
+        );
+        let p = Money::from_paise;
+        let ok = override_line_tax(
+            calc,
+            SupplyKind::IntraState,
+            EnteredTax {
+                cgst: p(9_000),
+                state: p(9_000),
+                ..EnteredTax::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(ok.taxable_value, calc.taxable_value);
+        assert_eq!(ok.total_tax(), p(18_000));
+        let err = |kind, e| override_line_tax(calc, kind, e).unwrap_err();
+        assert_eq!(
+            err(
+                SupplyKind::IntraState,
+                EnteredTax {
+                    cgst: p(9_000),
+                    state: p(9_001),
+                    ..EnteredTax::default()
+                }
+            ),
+            OverrideError::UnequalHalves
+        );
+        assert_eq!(
+            err(
+                SupplyKind::IntraState,
+                EnteredTax {
+                    igst: p(18_000),
+                    ..EnteredTax::default()
+                }
+            ),
+            OverrideError::IgstWithinState
+        );
+        assert_eq!(
+            err(
+                SupplyKind::InterState,
+                EnteredTax {
+                    cgst: p(9_000),
+                    state: p(9_000),
+                    ..EnteredTax::default()
+                }
+            ),
+            OverrideError::SplitBetweenStates
+        );
+        assert_eq!(
+            err(
+                SupplyKind::InterState,
+                EnteredTax {
+                    igst: p(200_000),
+                    ..EnteredTax::default()
+                }
+            ),
+            OverrideError::MoreThanValue
+        );
+        let exempt = LineTax {
+            taxable_value: p(10_000),
+            ..LineTax::default()
+        };
+        assert_eq!(
+            override_line_tax(exempt, SupplyKind::InterState, EnteredTax::default()).unwrap_err(),
+            OverrideError::NotTaxed
+        );
     }
 }

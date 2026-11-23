@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "react-router";
 import clsx from "clsx";
-import { ArrowLeft, Ban, FileDown, FilePlus2, Loader2, Pencil, Printer, Trash2 } from "lucide-react";
+import { ArrowLeft, Ban, FilePlus2, Loader2, Pencil, Trash2 } from "lucide-react";
 import { api, keys, type SalesDocumentView } from "../../lib/api";
 import { formatPaise, formatRate } from "../../lib/format";
 import { stateName } from "../../lib/gst";
@@ -13,7 +13,8 @@ import { Dialog } from "../../components/Dialog";
 import { Field, TextInput } from "../../components/form";
 import { SettlementsCard } from "../banking/Settlements";
 import { useLogoUrl } from "../../lib/logo";
-import { useToast } from "../../components/Toast";
+import { PdfActions } from "../../components/PdfActions";
+import { TaxOverrideNote } from "../../components/TaxOverride";
 
 export function SalesDocument() {
   const { id = "" } = useParams();
@@ -48,7 +49,7 @@ export function SalesDocument() {
           <Badge tone={status.tone}>{status.label}</Badge>
         </div>
         <div className="flex gap-2">
-          <PdfActions id={doc.id} draft={doc.status === "draft"} />
+          <PdfActions open={() => api.openSalesPdf(doc.id)} save={() => api.saveSalesPdf(doc.id)} printTitle={doc.status === "draft" ? "Opens with a DRAFT watermark" : undefined} />
           {doc.status === "draft" && (
             <>
               <Button onClick={() => setDeleting(true)}>
@@ -198,6 +199,7 @@ export function SalesDocument() {
               )}
             </Card>
           )}
+          <TaxOverrideNote doc={doc} />
           {doc.status !== "cancelled" && (doc.gstr1.label || doc.gstr1.nilTable) && (
             <Card className="p-4 text-[13px]">
               <div className="mb-2 text-[12px] font-semibold uppercase tracking-[0.04em] text-muted">GST return</div>
@@ -216,37 +218,6 @@ export function SalesDocument() {
       {cancelling && <CancelDialog doc={doc} onClose={() => setCancelling(false)} />}
       {deleting && <DeleteDialog doc={doc} onClose={() => setDeleting(false)} />}
     </div>
-  );
-}
-
-/** Save the PDF, or open it in the default viewer to print. Drafts print with a DRAFT watermark. */
-function PdfActions({ id, draft }: { id: string; draft: boolean }) {
-  const toast = useToast();
-  const [busy, setBusy] = useState<null | "save" | "open">(null);
-  const run = async (kind: "save" | "open") => {
-    setBusy(kind);
-    try {
-      if (kind === "open") {
-        await api.openSalesPdf(id);
-      } else {
-        const f = await api.saveSalesPdf(id);
-        if (f) toast(`Saved ${f.fileName}`, "success", { label: "Show in folder", onClick: () => void api.openSavedFile(f.path) });
-      }
-    } catch (e) {
-      toast(e instanceof Error ? e.message : String(e), "error");
-    } finally {
-      setBusy(null);
-    }
-  };
-  return (
-    <>
-      <Button disabled={!!busy} onClick={() => void run("open")} title={draft ? "Opens with a DRAFT watermark" : "Open in your PDF viewer to print"}>
-        {busy === "open" ? <Loader2 size={15} className="animate-spin" /> : <Printer size={15} />} Print
-      </Button>
-      <Button disabled={!!busy} onClick={() => void run("save")}>
-        {busy === "save" ? <Loader2 size={15} className="animate-spin" /> : <FileDown size={15} />} Save PDF
-      </Button>
-    </>
   );
 }
 

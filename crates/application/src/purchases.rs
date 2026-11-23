@@ -16,7 +16,7 @@ use av_domain::{
 };
 use av_gst_engine::checks::{LineFacts, TaxWarning, line_warnings};
 use av_gst_engine::invoice::{LineInput, Supply, compute_document, line_amount};
-use av_gst_engine::{RulePack, SupplyKind, TaxRate};
+use av_gst_engine::{RulePack, SupplyKind, TaxRate, document_totals};
 use av_persistence::records::{
     AccountRecord, AttachmentRecord, OrganisationRecord, PurchaseDocumentRecord, PurchaseLineRecord,
 };
@@ -35,6 +35,7 @@ use crate::masters::{parse_amount, parse_rate};
 use crate::posting::{PostLine, Posting, post};
 use crate::sales::{LineCalc, TotalsCalc, capital, kind_str, parse_quantity, to_paise};
 use crate::setup::{Change, audit, check_len, clean, json};
+use crate::tax_override::{self, TaxOverrideInput};
 
 const MAX_ATTACHMENT_BYTES: usize = 5 * 1024 * 1024;
 
@@ -92,6 +93,9 @@ pub struct PurchaseLineInput {
     /// Common credit (rule 42): used for both taxable and exempt supplies.
     #[serde(default)]
     pub itc_common: Option<bool>,
+    /// Tax entered by hand, e.g. as on the supplier's invoice.
+    #[serde(default)]
+    pub tax_override: Option<TaxOverrideInput>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -126,6 +130,9 @@ pub struct PurchaseDocumentInput {
     pub notes: Option<String>,
     #[serde(default)]
     pub lines: Vec<PurchaseLineInput>,
+    /// Why any line's tax was entered by hand.
+    #[serde(default)]
+    pub tax_override_reason: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -456,6 +463,7 @@ impl<S: Store> AppCore<S> {
         org: &OrganisationRecord,
         input: &PurchaseDocumentInput,
         self_id: Option<&str>,
+        ctx: Option<&RequestContext>,
     ) -> AppResult<(Errors, Option<Prepared>)> {
         let mut e = Errors::new("");
         let today = self.today();
@@ -826,6 +834,7 @@ impl<S: Store> AppCore<S> {
                         itc_reviewed_by: None,
                         itc_common: l.itc_common.unwrap_or(false),
                         itc_period: None,
+                        computed_tax_paise: None,
                     });
                 }
             }
@@ -852,17 +861,31 @@ impl<S: Store> AppCore<S> {
             AppError::Invalid(format!("line {} could not be computed", errs[0].0 + 1))
         })?;
         let now = self.now();
-        for ((rec, c), (i, status, reason, eligible)) in
-            records.iter_mut().zip(&computed.lines).zip(&decisions)
+        let mut oe = Errors::new("");
+        let taxes: Vec<_> = computed
+            .lines
+            .iter()
+            .zip(&decisions)
+            .map(|(c, (i, ..))| {
+                let entered = input.lines.get(*i).and_then(|l| l.tax_override.as_ref());
+                tax_override::apply(&mut oe, *i, entered, c.tax, kind)
+            })
+            .collect();
+        for (((rec, c), (i, status, reason, eligible)), (tax, calculated)) in records
+            .iter_mut()
+            .zip(&computed.lines)
+            .zip(&decisions)
+            .zip(&taxes)
         {
             rec.amount_paise = to_paise(c.amount);
-            rec.taxable_paise = to_paise(c.tax.taxable_value);
-            rec.cgst_paise = to_paise(c.tax.cgst);
-            rec.sgst_paise = to_paise(c.tax.sgst);
-            rec.utgst_paise = to_paise(c.tax.utgst);
-            rec.igst_paise = to_paise(c.tax.igst);
-            rec.cess_paise = to_paise(c.tax.cess);
-            rec.total_paise = to_paise(c.tax.line_total());
+            rec.taxable_paise = to_paise(tax.taxable_value);
+            rec.cgst_paise = to_paise(tax.cgst);
+            rec.sgst_paise = to_paise(tax.sgst);
+            rec.utgst_paise = to_paise(tax.utgst);
+            rec.igst_paise = to_paise(tax.igst);
+            rec.cess_paise = to_paise(tax.cess);
+            rec.total_paise = to_paise(tax.line_total());
+            rec.computed_tax_paise = *calculated;
             let dec = decide_itc(
                 &mut e,
                 &format!("lines.{i}."),
@@ -880,7 +903,15 @@ impl<S: Store> AppCore<S> {
                 rec.itc_reviewed_at = Some(now.clone());
             }
         }
-        let tt = computed.totals;
+        let tt = document_totals(taxes.iter().map(|(t, _)| t), false);
+        let changed = records.iter().any(|l| l.computed_tax_paise.is_some());
+        let (override_reason, override_by, override_at) = match ctx {
+            Some(ctx) => {
+                e.absorb(oe);
+                tax_override::stamp(&mut e, ctx, changed, &input.tax_override_reason, &now)
+            }
+            None => (None, None, None),
+        };
         let tax_total = to_paise(tt.cgst + tt.sgst + tt.utgst + tt.igst + tt.cess);
         let taxable = to_paise(tt.taxable_value);
         let base = if reverse_charge {
@@ -959,6 +990,9 @@ impl<S: Store> AppCore<S> {
             recorded_at: None,
             cancelled_at: None,
             rule_pack_version: Some(RulePack::bundled().version.clone()),
+            tax_override_reason: override_reason,
+            tax_override_by: override_by,
+            tax_override_at: override_at,
         };
         // Rates are checked on the supplier's invoice date when known.
         let rate_date = doc
@@ -1148,7 +1182,9 @@ impl<S: Store> AppCore<S> {
         ctx.require(Permission::ViewBusiness)?;
         let mut uow = self.store.begin().await?;
         let org = self.require_org(ctx, &mut uow).await?;
-        let (_, prepared) = self.prepare_purchase(&mut uow, &org, &input, None).await?;
+        let (_, prepared) = self
+            .prepare_purchase(&mut uow, &org, &input, None, None)
+            .await?;
         if let Some(p) = prepared {
             let d = &p.doc;
             return Ok(PurchaseCalculation {
@@ -1268,7 +1304,9 @@ impl<S: Store> AppCore<S> {
         ctx.require(Permission::PrepareDocuments)?;
         let mut uow = self.store.begin().await?;
         let org = self.require_org(ctx, &mut uow).await?;
-        let (e, prepared) = self.prepare_purchase(&mut uow, &org, &input, id).await?;
+        let (e, prepared) = self
+            .prepare_purchase(&mut uow, &org, &input, id, Some(ctx))
+            .await?;
         e.finish()?;
         let doc = self
             .write_purchase_draft(
@@ -1296,7 +1334,9 @@ impl<S: Store> AppCore<S> {
         ctx.require(Permission::PostDocuments)?;
         let mut uow = self.store.begin().await?;
         let org = self.require_org(ctx, &mut uow).await?;
-        let (mut e, prepared) = self.prepare_purchase(&mut uow, &org, &input, id).await?;
+        let (mut e, prepared) = self
+            .prepare_purchase(&mut uow, &org, &input, id, Some(ctx))
+            .await?;
         if let Some(p) = &prepared
             && let Some(lock) = self
                 .gst_lock(
@@ -1804,5 +1844,6 @@ fn line_calc(l: &PurchaseLineRecord) -> LineCalc {
         igst_paise: l.igst_paise,
         cess_paise: l.cess_paise,
         total_paise: l.total_paise,
+        computed_tax_paise: l.computed_tax_paise,
     }
 }

@@ -367,6 +367,40 @@ pub async fn open_sales_pdf(app: AppHandle, core: State<'_, AppCore>, id: String
         .map_err(io_err)
 }
 
+/// Renders a receipt, payment or refund voucher and asks where to save it.
+#[tauri::command]
+pub async fn save_voucher_pdf(
+    app: AppHandle,
+    core: State<'_, AppCore>,
+    files: State<'_, SavedFiles>,
+    id: String,
+) -> CmdResult<Option<SavedFile>> {
+    let pdf = core.voucher_pdf(&ctx(), &id).await?;
+    let Some(path) = save_dialog(&app, pdf.file_name.clone(), ("PDF document", "pdf")).await else {
+        return Ok(None);
+    };
+    write_file(&path, &pdf.bytes)?;
+    files.remember(&path);
+    Ok(Some(saved(&path, pdf.bytes.len())))
+}
+
+/// Opens a voucher in the default PDF viewer.
+#[tauri::command]
+pub async fn open_voucher_pdf(
+    app: AppHandle,
+    core: State<'_, AppCore>,
+    id: String,
+) -> CmdResult<()> {
+    let pdf = core.voucher_pdf(&ctx(), &id).await?;
+    let dir = std::env::temp_dir().join("AccountsVU");
+    std::fs::create_dir_all(&dir).map_err(io_err)?;
+    let path = dir.join(&pdf.file_name);
+    write_file(&path, &pdf.bytes)?;
+    app.opener()
+        .open_path(path.display().to_string(), None::<&str>)
+        .map_err(io_err)
+}
+
 /// Asks where to save, then writes the GSTR-1 portal JSON. `None` when
 /// cancelled. The export is audit-logged only once a file is written.
 #[tauri::command]

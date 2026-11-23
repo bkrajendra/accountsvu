@@ -25,7 +25,7 @@ use serde::Serialize;
 use crate::AppCore;
 use crate::context::{Permission, RequestContext};
 use crate::error::{AppError, AppResult};
-use crate::returns::{Doc, Period, ReturnException, build, iso, state_name};
+use crate::returns::{Period, ReturnException, ReturnSales, advance_rows, build, iso, state_name};
 use crate::sales::{gstr1_of, kind_of, recipient_of};
 
 // ---------------------------------------------------------------------------
@@ -283,7 +283,7 @@ fn zero_rated(d: &SalesDocumentRecord, original: Option<&SalesDocumentRecord>) -
 
 pub(crate) fn build_3b(
     reg: &RegistrationRecord,
-    sales: &[Doc],
+    sales: &ReturnSales,
     purchases: &[Purchase],
     period: Period,
     brought_forward: Heads,
@@ -308,6 +308,24 @@ pub(crate) fn build_3b(
         row("d", "(d) Inward supplies (liable to reverse charge)"),
         row("e", "(e) Non-GST outward supplies"),
     ];
+    // Tax on advances (GSTR-1 11A less 11B) is part of 3.1(a).
+    for r in advance_rows(reg, &sales.advances, period) {
+        let sign = if r.table == "11A" { 1 } else { -1 };
+        add_row(
+            &mut outward,
+            "a",
+            sign * r.totals.taxable_paise,
+            scale(
+                Heads {
+                    igst: r.totals.igst_paise,
+                    cgst: r.totals.cgst_paise,
+                    sgst: r.totals.sgst_paise,
+                    cess: r.totals.cess_paise,
+                },
+                sign,
+            ),
+        );
+    }
     let mut inter: BTreeMap<i64, InterStateRow> = BTreeMap::new();
     for (d, lines) in sales
         .iter()
@@ -554,13 +572,29 @@ pub(crate) fn build_3b(
     let cross: Vec<CrossCheckRow> = [
         (
             "Taxable value (3.1 a + b)",
-            g1.totals.taxable_paise,
+            g1.totals.taxable_paise + g1.advance_totals.taxable_paise,
             ab(|r| r.taxable_paise),
         ),
-        ("IGST", g1.totals.igst_paise, ab(|r| r.tax.igst)),
-        ("CGST", g1.totals.cgst_paise, ab(|r| r.tax.cgst)),
-        ("SGST/UTGST", g1.totals.sgst_paise, ab(|r| r.tax.sgst)),
-        ("Cess", g1.totals.cess_paise, ab(|r| r.tax.cess)),
+        (
+            "IGST",
+            g1.totals.igst_paise + g1.advance_totals.igst_paise,
+            ab(|r| r.tax.igst),
+        ),
+        (
+            "CGST",
+            g1.totals.cgst_paise + g1.advance_totals.cgst_paise,
+            ab(|r| r.tax.cgst),
+        ),
+        (
+            "SGST/UTGST",
+            g1.totals.sgst_paise + g1.advance_totals.sgst_paise,
+            ab(|r| r.tax.sgst),
+        ),
+        (
+            "Cess",
+            g1.totals.cess_paise + g1.advance_totals.cess_paise,
+            ab(|r| r.tax.cess),
+        ),
         (
             "Nil-rated, exempt and non-GST (3.1 c + e)",
             nil_g1,
@@ -705,7 +739,7 @@ pub(crate) fn build_3b(
 /// carried forward from one month to the next.
 pub(crate) fn build_3b_series(
     reg: &RegistrationRecord,
-    sales: &[Doc],
+    sales: &ReturnSales,
     purchases: &[Purchase],
     first: Period,
     last: Period,

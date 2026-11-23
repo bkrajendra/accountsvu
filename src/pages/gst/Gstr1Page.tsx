@@ -12,7 +12,7 @@ import { Amount, Loading } from "../reports/common";
 import { statusBadge, useReturnScope } from "./ReturnCentre";
 import { FilingPanel, useFiling } from "./FilingPanel";
 
-type Tab = "b2b" | "b2cl" | "exp" | "b2cs" | "nil" | "cdn" | "hsn" | "docs";
+type Tab = "b2b" | "b2cl" | "exp" | "b2cs" | "nil" | "cdn" | "adv" | "hsn" | "docs";
 
 const TAB_OF: Record<ReturnSectionKey, Tab> = {
   b2b: "b2b",
@@ -22,6 +22,8 @@ const TAB_OF: Record<ReturnSectionKey, Tab> = {
   nil: "nil",
   cdnr: "cdn",
   cdnur: "cdn",
+  at: "adv",
+  atadj: "adv",
   hsn: "hsn",
   docs: "docs",
 };
@@ -56,6 +58,7 @@ export function Gstr1Page() {
     { value: "exp", label: "Exports", count: count(["exp"]) },
     { value: "nil", label: "Nil & exempt", count: data.nil.length },
     { value: "cdn", label: "Credit notes", count: count(["cdnr", "cdnur"]) },
+    ...(data.advances.length ? [{ value: "adv" as const, label: "Advances", count: data.advances.length }] : []),
     { value: "hsn", label: "HSN", count: data.hsn.length },
     { value: "docs", label: "Documents", count: data.series.length },
   ];
@@ -98,7 +101,7 @@ export function Gstr1Page() {
           </thead>
           <tbody className="divide-y divide-line">
             {data.sections.map((s) => {
-              const credit = s.key === "cdnr" || s.key === "cdnur";
+              const credit = s.key === "cdnr" || s.key === "cdnur" || s.key === "atadj";
               const sign = credit ? -1 : 1;
               const amount = s.key === "nil" ? s.valuePaise : s.totals.taxablePaise;
               const go = () => setTab(TAB_OF[s.key]);
@@ -123,11 +126,21 @@ export function Gstr1Page() {
           </tbody>
           <tfoot>
             <tr className="border-t border-line-strong bg-surface-2 font-semibold">
-              <td colSpan={2} className="px-4 py-2.5">Net output tax</td>
+              <td colSpan={2} className="px-4 py-2.5">{data.advances.length ? "Net output tax on documents" : "Net output tax"}</td>
               <td />
               <td className="px-3 py-2.5 text-right"><Amount paise={data.totals.taxablePaise} zero /></td>
               <TaxCells t={data.totals} zero />
             </tr>
+            {data.advances.length > 0 && (
+              <tr className="border-t border-line bg-surface-2 font-semibold">
+                <td colSpan={2} className="px-4 py-2.5">
+                  Tax on advances <span className="font-normal text-muted">(11A less 11B, added to GSTR-3B 3.1(a))</span>
+                </td>
+                <td />
+                <td className="px-3 py-2.5 text-right"><Amount paise={data.advanceTotals.taxablePaise} zero /></td>
+                <TaxCells t={data.advanceTotals} zero />
+              </tr>
+            )}
           </tfoot>
         </table>
       </Card>
@@ -278,6 +291,49 @@ function TabBody({ tab, data }: { tab: Tab; data: Gstr1 }) {
             </tr>
           ))}
           {data.b2cs.length === 0 && <Empty cols={8} text="No B2C small supplies this month." />}
+        </tbody>
+      </table>
+    );
+  }
+
+  if (tab === "adv") {
+    return (
+      <table className="w-full text-[13px]">
+        <thead>
+          <tr className={head}>
+            <Th>Table</Th>
+            <Th>Place of supply</Th>
+            <Th right>Rate</Th>
+            <Th right>Advance less tax</Th>
+            <Th right>IGST</Th>
+            <Th right>CGST</Th>
+            <Th right>SGST/UTGST</Th>
+            <Th right>Cess</Th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-line">
+          {data.advances.map((r) => (
+            <tr key={`${r.table}-${r.placeOfSupply}-${r.rateBp}`} className="align-top">
+              <td className="px-4 py-2">
+                <span className="num">{r.table}</span>
+                <div className="text-[12px] text-muted">{r.table === "11A" ? "Received, not yet invoiced" : "Adjusted or refunded"}</div>
+              </td>
+              <td className="px-3 py-2">
+                <span className="num text-muted">{String(r.placeOfSupply).padStart(2, "0")}</span> {r.placeName}
+                <span className="text-muted"> · {r.intraState ? "intra-state" : "inter-state"}</span>
+                <div className="mt-0.5 flex flex-wrap gap-x-2 text-[12px]">
+                  {r.vouchers.map((v) => (
+                    <Link key={v.id} to={`/banking/vouchers/${v.id}`} className="num text-accent hover:underline">
+                      {v.number}
+                    </Link>
+                  ))}
+                </div>
+              </td>
+              <td className="num px-3 py-2 text-right">{formatRate(r.rateBp)}</td>
+              <td className="px-3 py-2 text-right"><Amount paise={r.totals.taxablePaise} zero /></td>
+              <TaxCells t={r.totals} />
+            </tr>
+          ))}
         </tbody>
       </table>
     );

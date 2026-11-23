@@ -11,7 +11,7 @@ use crate::{Amount, Quantity, Rate};
 
 /// Format version of this adapter. Bump it whenever the output changes, and
 /// update the golden files in the same commit.
-pub const ADAPTER_VERSION: &str = "gstr1-json/1";
+pub const ADAPTER_VERSION: &str = "gstr1-json/2";
 
 /// Value of the `version` field the portal expects in the file header.
 pub const PORTAL_SCHEMA: &str = "GST3.2.2";
@@ -45,6 +45,20 @@ pub struct Gstr1Return {
     pub hsn_b2c: Vec<HsnRow>,
     /// Table 13: documents issued.
     pub documents: Vec<DocumentSeries>,
+    /// Table 11A: tax on advances received in the month and not yet invoiced.
+    pub at: Vec<AdvanceRow>,
+    /// Table 11B: advances on which tax was paid earlier, adjusted against
+    /// invoices or refunded this month.
+    pub txpd: Vec<AdvanceRow>,
+}
+
+/// Advances at one place of supply (tables 11A and 11B), one item per rate.
+/// `taxable_paise` is the advance less the tax in it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AdvanceRow {
+    pub pos: u8,
+    pub intra_state: bool,
+    pub items: Vec<RateItem>,
 }
 
 /// Tax at one rate on a document.
@@ -223,6 +237,10 @@ struct File<'a> {
     cdnur: Vec<Cdnur>,
     #[serde(skip_serializing_if = "Option::is_none")]
     nil: Option<Nil>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    at: Vec<AdvanceGroup>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    txpd: Vec<AdvanceGroup>,
     #[serde(skip_serializing_if = "Option::is_none")]
     hsn: Option<Hsn>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -325,6 +343,52 @@ struct B2clInvoice {
     idt: String,
     val: Amount,
     itms: Vec<NumberedItem>,
+}
+
+#[derive(Serialize)]
+struct AdvanceGroup {
+    pos: String,
+    sply_ty: &'static str,
+    itms: Vec<AdvanceItem>,
+}
+
+#[derive(Serialize)]
+struct AdvanceItem {
+    rt: Rate,
+    ad_amt: Amount,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    iamt: Option<Amount>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    camt: Option<Amount>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    samt: Option<Amount>,
+    csamt: Amount,
+}
+
+fn advance_groups(rows: &[AdvanceRow]) -> Vec<AdvanceGroup> {
+    let mut rows = rows.to_vec();
+    rows.sort_by_key(|r| (r.pos, !r.intra_state));
+    rows.iter()
+        .map(|r| AdvanceGroup {
+            pos: pos(r.pos),
+            sply_ty: if r.intra_state { "INTRA" } else { "INTER" },
+            itms: r
+                .items
+                .iter()
+                .map(|i| {
+                    let d = detail(i, heads(r.intra_state));
+                    AdvanceItem {
+                        rt: d.rt,
+                        ad_amt: d.txval,
+                        iamt: d.iamt,
+                        camt: d.camt,
+                        samt: d.samt,
+                        csamt: d.csamt,
+                    }
+                })
+                .collect(),
+        })
+        .collect()
 }
 
 #[derive(Serialize)]
@@ -656,6 +720,8 @@ pub fn to_json(r: &Gstr1Return) -> String {
                     .collect(),
             }
         }),
+        at: advance_groups(&r.at),
+        txpd: advance_groups(&r.txpd),
         hsn: (!r.hsn_b2b.is_empty() || !r.hsn_b2c.is_empty()).then(|| Hsn {
             hsn_b2b: hsn_entries(&r.hsn_b2b),
             hsn_b2c: hsn_entries(&r.hsn_b2c),

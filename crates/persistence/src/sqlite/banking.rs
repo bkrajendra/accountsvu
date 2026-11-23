@@ -2,8 +2,8 @@
 
 use super::SqliteUow;
 use crate::records::{
-    AccountOpeningRecord, MoneyAccountRecord, MoneyVoucherRecord, OpenDocumentRecord,
-    StatementLineRecord, VoucherAllocationRecord,
+    AccountOpeningRecord, AdvanceAdjustmentRecord, AdvanceTaxRecord, MoneyAccountRecord,
+    MoneyVoucherRecord, OpenDocumentRecord, StatementLineRecord, VoucherAllocationRecord,
 };
 use crate::repo::{BankingRepo, DbResult};
 
@@ -12,7 +12,11 @@ const MONEY_COLS: &str = "id, organisation_id, account_id, kind, name, bank_name
 
 const VOUCHER_COLS: &str = "id, organisation_id, voucher_type, status, number, financial_year, seq, voucher_date, \
     money_account_id, party_id, counter_account_id, amount_paise, mode, reference, narration, journal_entry_id, \
-    cancel_entry_id, cancel_reason, row_version, created_at, updated_at, cancelled_at";
+    cancel_entry_id, cancel_reason, row_version, created_at, updated_at, cancelled_at, purpose, refund_of_id";
+
+const ADVANCE_TAX_COLS: &str = "voucher_id, organisation_id, gst_registration_id, place_of_supply, rate_bp,     gross_paise, taxable_paise, igst_paise, cgst_paise, sgst_paise, utgst_paise, cess_paise";
+
+const ADJUSTMENT_COLS: &str = "id, organisation_id, voucher_id, reason, allocation_id, refund_voucher_id,     adjust_date, gross_paise, taxable_paise, igst_paise, cgst_paise, sgst_paise, utgst_paise, cess_paise,     journal_entry_id, status, cancel_entry_id, created_at";
 
 const LINE_COLS: &str = "id, organisation_id, money_account_id, line_date, description, reference, withdrawal_paise, \
     deposit_paise, balance_paise, fingerprint, import_batch, source_file, status, journal_entry_id, matched_at, \
@@ -187,8 +191,9 @@ impl BankingRepo for SqliteUow {
             "INSERT INTO money_voucher (id, organisation_id, voucher_type, status, number, financial_year, seq,
                  voucher_date, money_account_id, party_id, counter_account_id, amount_paise, mode, reference,
                  narration, journal_entry_id, cancel_entry_id, cancel_reason, row_version, created_at, updated_at,
-                 cancelled_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, 1, ?19, ?20, ?21)",
+                 cancelled_at, purpose, refund_of_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, 1, ?19, ?20, ?21,
+                     ?22, ?23)",
         )
         .bind(&v.id)
         .bind(&v.organisation_id)
@@ -211,6 +216,8 @@ impl BankingRepo for SqliteUow {
         .bind(&v.created_at)
         .bind(&v.updated_at)
         .bind(&v.cancelled_at)
+        .bind(&v.purpose)
+        .bind(&v.refund_of_id)
         .execute(self.c())
         .await?;
         Ok(())
@@ -267,17 +274,112 @@ impl BankingRepo for SqliteUow {
 
     async fn insert_allocation(&mut self, a: &VoucherAllocationRecord) -> DbResult<()> {
         sqlx::query(
-            "INSERT INTO voucher_allocation (id, voucher_id, document_kind, document_id, amount_paise)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
+            "INSERT INTO voucher_allocation (id, voucher_id, document_kind, document_id, amount_paise,
+                 allocated_on, allocated_by)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         )
         .bind(&a.id)
         .bind(&a.voucher_id)
         .bind(&a.document_kind)
         .bind(&a.document_id)
         .bind(a.amount_paise)
+        .bind(&a.allocated_on)
+        .bind(&a.allocated_by)
         .execute(self.c())
         .await?;
         Ok(())
+    }
+
+    async fn insert_advance_tax(&mut self, t: &AdvanceTaxRecord) -> DbResult<()> {
+        sqlx::query(&format!(
+            "INSERT INTO voucher_advance_tax ({ADVANCE_TAX_COLS})
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)"
+        ))
+        .bind(&t.voucher_id)
+        .bind(&t.organisation_id)
+        .bind(&t.gst_registration_id)
+        .bind(t.place_of_supply)
+        .bind(t.rate_bp)
+        .bind(t.gross_paise)
+        .bind(t.taxable_paise)
+        .bind(t.igst_paise)
+        .bind(t.cgst_paise)
+        .bind(t.sgst_paise)
+        .bind(t.utgst_paise)
+        .bind(t.cess_paise)
+        .execute(self.c())
+        .await?;
+        Ok(())
+    }
+
+    async fn list_advance_taxes(&mut self, org_id: &str) -> DbResult<Vec<AdvanceTaxRecord>> {
+        let sql = format!(
+            "SELECT {ADVANCE_TAX_COLS} FROM voucher_advance_tax WHERE organisation_id = ?1"
+        );
+        Ok(sqlx::query_as(&sql)
+            .bind(org_id)
+            .fetch_all(self.c())
+            .await?)
+    }
+
+    async fn insert_advance_adjustment(&mut self, a: &AdvanceAdjustmentRecord) -> DbResult<()> {
+        sqlx::query(&format!(
+            "INSERT INTO advance_tax_adjustment ({ADJUSTMENT_COLS})
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)"
+        ))
+        .bind(&a.id)
+        .bind(&a.organisation_id)
+        .bind(&a.voucher_id)
+        .bind(&a.reason)
+        .bind(&a.allocation_id)
+        .bind(&a.refund_voucher_id)
+        .bind(&a.adjust_date)
+        .bind(a.gross_paise)
+        .bind(a.taxable_paise)
+        .bind(a.igst_paise)
+        .bind(a.cgst_paise)
+        .bind(a.sgst_paise)
+        .bind(a.utgst_paise)
+        .bind(a.cess_paise)
+        .bind(&a.journal_entry_id)
+        .bind(&a.status)
+        .bind(&a.cancel_entry_id)
+        .bind(&a.created_at)
+        .execute(self.c())
+        .await?;
+        Ok(())
+    }
+
+    async fn list_advance_adjustments(
+        &mut self,
+        org_id: &str,
+    ) -> DbResult<Vec<AdvanceAdjustmentRecord>> {
+        let sql = format!(
+            "SELECT {ADJUSTMENT_COLS} FROM advance_tax_adjustment WHERE organisation_id = ?1
+              ORDER BY adjust_date, created_at"
+        );
+        Ok(sqlx::query_as(&sql)
+            .bind(org_id)
+            .fetch_all(self.c())
+            .await?)
+    }
+
+    async fn cancel_advance_adjustment(
+        &mut self,
+        org_id: &str,
+        id: &str,
+        cancel_entry_id: &str,
+    ) -> DbResult<bool> {
+        let r = sqlx::query(
+            "UPDATE advance_tax_adjustment SET status = 'cancelled', cancel_entry_id = ?3
+              WHERE organisation_id = ?1 AND id = ?2 AND status = 'posted'",
+        )
+        .bind(org_id)
+        .bind(id)
+        .bind(cancel_entry_id)
+        .execute(self.c())
+        .await?;
+        Ok(r.rows_affected() == 1)
     }
 
     async fn voucher_allocations(
@@ -285,7 +387,7 @@ impl BankingRepo for SqliteUow {
         voucher_id: &str,
     ) -> DbResult<Vec<VoucherAllocationRecord>> {
         Ok(sqlx::query_as(
-            "SELECT id, voucher_id, document_kind, document_id, amount_paise
+            "SELECT id, voucher_id, document_kind, document_id, amount_paise, allocated_on, allocated_by
                FROM voucher_allocation WHERE voucher_id = ?1 ORDER BY rowid",
         )
         .bind(voucher_id)

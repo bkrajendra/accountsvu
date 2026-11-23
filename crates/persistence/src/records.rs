@@ -227,6 +227,11 @@ pub struct SalesDocumentRecord {
     pub cancelled_at: Option<String>,
     /// GST rule pack the tax was computed with (Phase 2.1); `None` before.
     pub rule_pack_version: Option<String>,
+    /// Manual tax override (spec §5.6): why, who and when. Set when any line's
+    /// tax was entered by hand.
+    pub tax_override_reason: Option<String>,
+    pub tax_override_by: Option<String>,
+    pub tax_override_at: Option<String>,
 }
 
 #[derive(Clone, Debug, FromRow, Serialize)]
@@ -253,6 +258,8 @@ pub struct SalesLineRecord {
     pub igst_paise: i64,
     pub cess_paise: i64,
     pub total_paise: i64,
+    /// Set when the line's tax was entered by hand: the tax as calculated.
+    pub computed_tax_paise: Option<i64>,
 }
 
 #[derive(Clone, Debug, FromRow, Serialize)]
@@ -302,6 +309,11 @@ pub struct PurchaseDocumentRecord {
     pub cancelled_at: Option<String>,
     /// GST rule pack the tax was computed with (Phase 2.1); `None` before.
     pub rule_pack_version: Option<String>,
+    /// Manual tax override (spec §5.6): why, who and when. Set when any line's
+    /// tax was entered by hand.
+    pub tax_override_reason: Option<String>,
+    pub tax_override_by: Option<String>,
+    pub tax_override_at: Option<String>,
 }
 
 #[derive(Clone, Debug, FromRow, Serialize)]
@@ -339,6 +351,8 @@ pub struct PurchaseLineRecord {
     /// `YYYY-MM` the ITC is claimed in when reviewed after the document's
     /// GSTR-3B was filed (Phase 2.5). `None`: the document's month.
     pub itc_period: Option<String>,
+    /// Set when the line's tax was entered by hand: the tax as calculated.
+    pub computed_tax_paise: Option<i64>,
 }
 
 #[derive(Clone, Debug, FromRow, Serialize)]
@@ -414,6 +428,10 @@ pub struct MoneyVoucherRecord {
     pub created_at: String,
     pub updated_at: String,
     pub cancelled_at: Option<String>,
+    /// `settlement` (the party's account) or `refund` (money given back).
+    pub purpose: String,
+    /// The advance a refund gives back, when named.
+    pub refund_of_id: Option<String>,
 }
 
 #[derive(Clone, Debug, FromRow, Serialize)]
@@ -424,6 +442,53 @@ pub struct VoucherAllocationRecord {
     pub document_kind: String,
     pub document_id: String,
     pub amount_paise: i64,
+    /// Set when the allocation was made after the voucher (an advance
+    /// adjusted against a later document).
+    pub allocated_on: Option<String>,
+    pub allocated_by: Option<String>,
+}
+
+/// GST paid on an advance received before the supply (Phase 2.6).
+#[derive(Clone, Debug, FromRow, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdvanceTaxRecord {
+    pub voucher_id: String,
+    pub organisation_id: String,
+    pub gst_registration_id: String,
+    pub place_of_supply: i64,
+    pub rate_bp: i64,
+    pub gross_paise: i64,
+    pub taxable_paise: i64,
+    pub igst_paise: i64,
+    pub cgst_paise: i64,
+    pub sgst_paise: i64,
+    pub utgst_paise: i64,
+    pub cess_paise: i64,
+}
+
+/// Part of a taxed advance adjusted against an invoice or refunded.
+#[derive(Clone, Debug, FromRow, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdvanceAdjustmentRecord {
+    pub id: String,
+    pub organisation_id: String,
+    pub voucher_id: String,
+    /// `invoice` or `refund`.
+    pub reason: String,
+    pub allocation_id: Option<String>,
+    pub refund_voucher_id: Option<String>,
+    pub adjust_date: String,
+    pub gross_paise: i64,
+    pub taxable_paise: i64,
+    pub igst_paise: i64,
+    pub cgst_paise: i64,
+    pub sgst_paise: i64,
+    pub utgst_paise: i64,
+    pub cess_paise: i64,
+    pub journal_entry_id: String,
+    pub status: String,
+    pub cancel_entry_id: Option<String>,
+    pub created_at: String,
 }
 
 /// An invoice or bill of a party with something still to settle.

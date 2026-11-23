@@ -570,6 +570,26 @@ pub async fn create_voucher(
 }
 
 #[tauri::command]
+pub async fn adjust_advance(
+    core: State<'_, AppCore>,
+    id: String,
+    input: av_application::advances::AdjustAdvanceInput,
+) -> CmdResult<VoucherView> {
+    Ok(core.adjust_advance(&ctx(), &id, &input).await?)
+}
+
+#[tauri::command]
+pub async fn party_advances(
+    core: State<'_, AppCore>,
+    party_id: String,
+    voucher_type: String,
+) -> CmdResult<Vec<av_application::advances::PartyAdvanceView>> {
+    Ok(core
+        .party_advances(&ctx(), &party_id, &voucher_type)
+        .await?)
+}
+
+#[tauri::command]
 pub async fn cancel_voucher(
     core: State<'_, AppCore>,
     id: String,

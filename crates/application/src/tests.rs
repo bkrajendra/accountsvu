@@ -56,7 +56,7 @@ async fn fresh_install_health_and_dashboard() {
     let core = core().await;
     let h = core.health().await.unwrap();
     assert!(!h.organisation_configured);
-    assert_eq!(h.schema_version, 12);
+    assert_eq!(h.schema_version, 14);
     let d = core
         .dashboard_summary(&ctx(), "2026-11-01", "2026-11-30")
         .await
@@ -1777,6 +1777,97 @@ async fn operators_prepare_sales_but_cannot_issue() {
         .unwrap();
 }
 
+#[tokio::test]
+async fn tax_entered_by_hand_needs_a_reason_and_an_accountant() {
+    use crate::tax_override::TaxOverrideInput;
+    let s = shop().await;
+    let core = &s.core;
+    // 1,000.50 at 18% within the state: 90.05 + 90.05 as calculated.
+    let mut input = invoice(
+        &s.customer,
+        "2026-11-10",
+        vec![line(None, "1", "1000.50", "18")],
+    );
+    input.lines[0].tax_override = Some(TaxOverrideInput {
+        cgst: Some("90".into()),
+        sgst: Some("90".into()),
+        ..Default::default()
+    });
+    // Live figures show the entered tax without asking for a reason yet.
+    let calc = core.calculate_sales(&ctx(), input.clone()).await.unwrap();
+    let l = calc.lines[0].as_ref().unwrap();
+    assert_eq!((l.cgst_paise, l.computed_tax_paise), (9_000, Some(18_010)));
+
+    let err = core
+        .issue_sales_document(&ctx(), None, input.clone(), None)
+        .await
+        .unwrap_err();
+    assert_eq!(fields(&err), vec!["taxOverrideReason"]);
+
+    let operator = RequestContext {
+        actor: user("op", Role::Operator),
+        scope: crate::context::OrgScope::Install,
+    };
+    input.tax_override_reason = Some("As agreed on the purchase order".into());
+    let err = core
+        .save_sales_draft(&operator, None, input.clone(), None)
+        .await
+        .unwrap_err();
+    assert!(fields(&err).contains(&"taxOverrideReason"), "{err:?}");
+
+    let mut bad = input.clone();
+    bad.lines[0].tax_override = Some(TaxOverrideInput {
+        igst: Some("180".into()),
+        ..Default::default()
+    });
+    let err = core
+        .issue_sales_document(&ctx(), None, bad, None)
+        .await
+        .unwrap_err();
+    assert_eq!(fields(&err), vec!["lines.0.taxOverride"]);
+
+    let doc = core
+        .issue_sales_document(&ctx(), None, input, None)
+        .await
+        .unwrap();
+    let d = &doc.document;
+    assert_eq!((d.cgst_paise, d.sgst_paise), (9_000, 9_000));
+    assert_eq!(d.total_paise, 118_100); // 1,000.50 + 180.00 = 1,180.50, rounded up
+    assert_eq!(doc.lines[0].computed_tax_paise, Some(18_010));
+    assert_eq!(
+        d.tax_override_reason.as_deref(),
+        Some("As agreed on the purchase order")
+    );
+    assert_eq!(d.tax_override_by.as_deref(), Some("Owner"));
+    // GSTR-1 reports the tax as entered.
+    let reg = core.business_profile(&ctx()).await.unwrap().registrations[0]
+        .id
+        .clone();
+    let g = core.gstr1(&ctx(), &reg, "2026-11").await.unwrap();
+    assert_eq!(g.totals.tax_paise, 18_000);
+
+    // A supplier's bill can match their invoice to the paisa.
+    let b = books().await;
+    let mut input = bill(
+        &b.supplier,
+        "S-77",
+        vec![pline(&b.purchases_acc, "1000.50", "18", None)],
+    );
+    input.lines[0].tax_override = Some(TaxOverrideInput {
+        cgst: Some("90.06".into()),
+        sgst: Some("90.06".into()),
+        ..Default::default()
+    });
+    input.tax_override_reason = Some("As on the supplier's invoice".into());
+    let rec = b
+        .core
+        .record_purchase(&ctx(), None, input, None)
+        .await
+        .unwrap();
+    assert_eq!(rec.document.cgst_paise, 9_006);
+    assert_eq!(rec.lines[0].computed_tax_paise, Some(18_010));
+}
+
 // ---------------------------------------------------------------------------
 // Phase 1.4 purchases
 // ---------------------------------------------------------------------------
@@ -3443,7 +3534,7 @@ async fn backup_restores_on_a_clean_install_and_checks_the_books() {
         .unwrap();
     assert!(backup.file_name.starts_with("Umang-") && backup.file_name.ends_with(".avbackup"));
     assert_eq!(backup.header.business_name, "Umang");
-    assert_eq!(backup.header.schema_version, 12);
+    assert_eq!(backup.header.schema_version, 14);
     let status = s
         .core
         .record_backup(&ctx(), &backup.file_name, &backup.bytes)
@@ -4587,4 +4678,236 @@ async fn gst_filing_records_arn_locks_the_month_and_moves_late_itc() {
     assert!(audit.iter().any(|e| e.action == "gst_filing.recorded"));
     assert!(audit.iter().any(|e| e.action == "gst_filing.removed"));
     assert!(audit.iter().any(|e| e.action == "gst_filing.pack_exported"));
+}
+
+#[tokio::test]
+async fn advances_pay_tax_adjust_later_and_refund() {
+    use crate::advances::{AdjustAdvanceInput, AdvanceTaxInput};
+
+    let s = shop().await;
+    let core = &s.core;
+    let bank = money_account(core, "bank").await;
+    let reg = core
+        .return_centre(&ctx(), None, None)
+        .await
+        .unwrap()
+        .registration_id
+        .unwrap();
+    let tax = AdvanceTaxInput {
+        registration_id: reg.clone(),
+        place_of_supply: 27,
+        rate_bp: 1800,
+    };
+
+    // ₹11,800 received in advance for a service: ₹1,800 of it is tax (11A).
+    let adv = core
+        .create_voucher(
+            &ctx(),
+            &VoucherInput {
+                advance_tax: Some(tax.clone()),
+                ..receipt(&s.customer, &bank, "2026-11-02", "11800")
+            },
+        )
+        .await
+        .unwrap();
+    let t = adv.advance_tax.clone().unwrap();
+    assert_eq!((t.taxable_paise, t.tax_paise), (1_000_000, 180_000));
+    assert_eq!(adv.on_account_paise, 1_180_000);
+    let g = core.gstr1(&ctx(), &reg, "2026-11").await.unwrap();
+    assert_eq!(g.advances.len(), 1);
+    assert_eq!(g.advances[0].table, "11A");
+    assert_eq!(g.advance_totals.tax_paise, 180_000);
+
+    // Tax on advances is only for receipts from customers.
+    let err = core
+        .create_voucher(
+            &ctx(),
+            &VoucherInput {
+                voucher_type: "payment".into(),
+                advance_tax: Some(tax.clone()),
+                ..receipt(&s.customer, &bank, "2026-11-02", "100")
+            },
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(fields(&err), vec!["advanceTax"]);
+
+    // Invoice for ₹5,900 later; half the advance is adjusted against it (11B).
+    let inv = core
+        .issue_sales_document(
+            &ctx(),
+            None,
+            invoice(
+                &s.customer,
+                "2026-11-05",
+                vec![line(None, "1", "5000", "18")],
+            ),
+            None,
+        )
+        .await
+        .unwrap();
+    let advances = core
+        .party_advances(&ctx(), &s.customer, "receipt")
+        .await
+        .unwrap();
+    assert_eq!(advances.len(), 1);
+    assert_eq!(
+        advances[0].taxed_registration_id.as_deref(),
+        Some(reg.as_str())
+    );
+    let err = core
+        .adjust_advance(
+            &ctx(),
+            &adv.voucher.id,
+            &AdjustAdvanceInput {
+                date: "2026-11-04".into(),
+                allocations: vec![alloc(&inv.document.id, "5900")],
+            },
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(
+        fields(&err),
+        vec!["allocations.0.amount"],
+        "invoice after the date"
+    );
+    let after = core
+        .adjust_advance(
+            &ctx(),
+            &adv.voucher.id,
+            &AdjustAdvanceInput {
+                date: "2026-11-06".into(),
+                allocations: vec![alloc(&inv.document.id, "5900")],
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(after.on_account_paise, 590_000);
+    assert_eq!(
+        after.allocations[0].allocated_on.as_deref(),
+        Some("2026-11-06")
+    );
+    assert_eq!(
+        after.advance_tax.as_ref().unwrap().remaining_tax_paise,
+        90_000
+    );
+    let paid = core
+        .get_sales_document(&ctx(), &inv.document.id)
+        .await
+        .unwrap();
+    assert_eq!(paid.display_status, DisplayStatus::Paid);
+
+    let g = core.gstr1(&ctx(), &reg, "2026-11").await.unwrap();
+    let b = g.advances.iter().find(|r| r.table == "11B").unwrap();
+    assert_eq!(
+        (b.totals.taxable_paise, b.totals.tax_paise),
+        (500_000, 90_000)
+    );
+    assert_eq!(g.advance_totals.tax_paise, 90_000);
+    let json = core.gstr1_json(&ctx(), &reg, "2026-11").await.unwrap().json;
+    assert!(json.contains("\"at\"") && json.contains("\"txpd\""));
+
+    // GSTR-3B 3.1(a): invoice tax plus tax on advances, matching GSTR-1.
+    let v = core.gstr3b(&ctx(), &reg, "2026-11").await.unwrap();
+    assert_eq!(v.outward[0].tax.total(), 90_000 + 90_000);
+    assert!(v.exceptions.iter().all(|e| e.code != "gstr1_mismatch"));
+
+    // Refund what is left: the rest of the tax is taken back.
+    let err = core
+        .create_voucher(
+            &ctx(),
+            &VoucherInput {
+                voucher_type: "payment".into(),
+                purpose: Some("refund".into()),
+                refund_of_id: Some(adv.voucher.id.clone()),
+                ..receipt(&s.customer, &bank, "2026-11-08", "6000")
+            },
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(fields(&err), vec!["amount"]);
+    let refund = core
+        .create_voucher(
+            &ctx(),
+            &VoucherInput {
+                voucher_type: "payment".into(),
+                purpose: Some("refund".into()),
+                refund_of_id: Some(adv.voucher.id.clone()),
+                ..receipt(&s.customer, &bank, "2026-11-08", "5900")
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        refund.refund_of_number.as_deref(),
+        Some(adv.voucher.number.as_str())
+    );
+    let adv_now = core.get_voucher(&ctx(), &adv.voucher.id).await.unwrap();
+    assert_eq!(adv_now.on_account_paise, 0);
+    assert_eq!(adv_now.refunded_paise, 590_000);
+    assert_eq!(adv_now.advance_tax.unwrap().remaining_tax_paise, 0);
+    // Invoice 5,900 − receipt 11,800 + refund 5,900: nothing owed either way.
+    assert_eq!(ravi_balance(core).await, 0);
+    let g = core.gstr1(&ctx(), &reg, "2026-11").await.unwrap();
+    assert_eq!(g.advance_totals.tax_paise, 0);
+
+    // Both print: a receipt voucher (rule 50) and a refund voucher (rule 51).
+    for id in [&adv.voucher.id, &refund.voucher.id] {
+        let pdf = core.voucher_pdf(&ctx(), id).await.unwrap();
+        assert!(pdf.bytes.starts_with(b"%PDF-"));
+        assert!(pdf.file_name.ends_with(".pdf"));
+    }
+
+    // The advance can't be cancelled while a refund of it stands; the refund can.
+    let err = core
+        .cancel_voucher(
+            &ctx(),
+            &adv.voucher.id,
+            "wrong",
+            adv_now.voucher.row_version,
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(err, AppError::Conflict(_)));
+    core.cancel_voucher(
+        &ctx(),
+        &refund.voucher.id,
+        "entered twice",
+        refund.voucher.row_version,
+    )
+    .await
+    .unwrap();
+    let adv_now = core.get_voucher(&ctx(), &adv.voucher.id).await.unwrap();
+    assert_eq!(adv_now.on_account_paise, 590_000);
+    assert_eq!(adv_now.advance_tax.unwrap().remaining_tax_paise, 90_000);
+
+    // Cancelling the advance reverses its tax and the invoice adjustment.
+    core.cancel_voucher(
+        &ctx(),
+        &adv.voucher.id,
+        "wrong",
+        adv_now.voucher.row_version,
+    )
+    .await
+    .unwrap();
+    let g = core.gstr1(&ctx(), &reg, "2026-11").await.unwrap();
+    assert!(g.advances.is_empty());
+    assert_eq!(ravi_balance(core).await, 590_000);
+
+    // A refund that doesn't fit the party side is refused.
+    let err = core
+        .create_voucher(
+            &ctx(),
+            &VoucherInput {
+                purpose: Some("refund".into()),
+                ..receipt(&s.customer, &bank, "2026-11-08", "100")
+            },
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(
+        fields(&err),
+        vec!["partyId"],
+        "receipts refund suppliers only"
+    );
 }

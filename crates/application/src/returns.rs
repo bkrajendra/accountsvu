@@ -30,6 +30,7 @@ use rust_decimal::Decimal;
 use serde::Serialize;
 
 use crate::AppCore;
+use crate::advances::AdvanceEvent;
 use crate::context::{Permission, RequestContext};
 use crate::error::{AppError, AppResult};
 use crate::purchases::sha256_hex;
@@ -180,6 +181,23 @@ pub struct B2csView {
     pub documents: Vec<DocLink>,
 }
 
+/// Tax on advances at one place of supply and rate: received this month
+/// and not invoiced (table 11A), or adjusted this month (table 11B).
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdvanceRowView {
+    /// `11A` or `11B`.
+    pub table: &'static str,
+    pub place_of_supply: i64,
+    pub place_name: String,
+    pub intra_state: bool,
+    pub rate_bp: u32,
+    /// Taxable value is the advance less the tax in it.
+    pub totals: TaxTotals,
+    /// Receipts the advances came in on.
+    pub vouchers: Vec<DocLink>,
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NilView {
@@ -248,6 +266,11 @@ pub struct Gstr1View {
     pub hsn: Vec<HsnView>,
     pub series: Vec<DocSeriesView>,
     pub exceptions: Vec<ReturnException>,
+    /// Tables 11A and 11B.
+    pub advances: Vec<AdvanceRowView>,
+    /// Tax on advances for the month: 11A less 11B. Part of the liability
+    /// in GSTR-3B 3.1(a), on top of `totals`.
+    pub advance_totals: TaxTotals,
 }
 
 /// The portal file, ready to save.
@@ -393,6 +416,107 @@ pub(crate) fn state_name(code: i64) -> String {
 
 pub(crate) type Doc = (SalesDocumentRecord, Vec<SalesLineRecord>);
 
+/// Everything outward a return is built from: sales documents, and tax on
+/// advances received or adjusted (Phase 2.6). Reads as the documents.
+pub(crate) struct ReturnSales {
+    pub(crate) docs: Vec<Doc>,
+    pub(crate) advances: Vec<AdvanceEvent>,
+}
+
+impl std::ops::Deref for ReturnSales {
+    type Target = [Doc];
+    fn deref(&self) -> &[Doc] {
+        &self.docs
+    }
+}
+
+/// Tax on advances of a GSTIN in a month, by table, place of supply and
+/// rate.
+pub(crate) fn advance_rows(
+    reg: &RegistrationRecord,
+    events: &[AdvanceEvent],
+    period: Period,
+) -> Vec<AdvanceRowView> {
+    let (from, to) = (iso(period.first()), iso(period.last()));
+    let mut acc: BTreeMap<(bool, i64, u32), (RateItem, Vec<DocLink>)> = BTreeMap::new();
+    for ev in events.iter().filter(|e| {
+        e.registration_id == reg.id
+            && e.date.as_str() >= from.as_str()
+            && e.date.as_str() <= to.as_str()
+    }) {
+        let (item, links) = acc
+            .entry((ev.received, ev.place_of_supply, ev.rate_bp))
+            .or_insert_with(|| {
+                (
+                    RateItem {
+                        rate_bp: ev.rate_bp,
+                        ..Default::default()
+                    },
+                    Vec::new(),
+                )
+            });
+        let p = ev.parts;
+        item.taxable_paise += p.taxable;
+        item.igst_paise += p.igst;
+        item.cgst_paise += p.cgst;
+        item.sgst_paise += p.sgst + p.utgst;
+        item.cess_paise += p.cess;
+        if !links.iter().any(|l: &DocLink| l.id == ev.voucher_id) {
+            links.push(DocLink {
+                id: ev.voucher_id.clone(),
+                number: ev.number.clone(),
+                doc_type: "receipt".into(),
+            });
+        }
+    }
+    let mut rows: Vec<AdvanceRowView> = acc
+        .into_iter()
+        .map(|((received, pos, rate), (item, vouchers))| AdvanceRowView {
+            table: if received { "11A" } else { "11B" },
+            place_of_supply: pos,
+            place_name: state_name(pos),
+            intra_state: pos == reg.state_code,
+            rate_bp: rate,
+            totals: totals_of(&[item]),
+            vouchers,
+        })
+        .collect();
+    rows.sort_by_key(|r| (r.table, r.place_of_supply, r.rate_bp));
+    rows
+}
+
+/// 11A less 11B.
+pub(crate) fn net_advances(rows: &[AdvanceRowView]) -> TaxTotals {
+    rows.iter().fold(TaxTotals::default(), |t, r| {
+        add_totals(t, r.totals, if r.table == "11A" { 1 } else { -1 })
+    })
+}
+
+fn portal_advances(rows: &[AdvanceRowView], table: &str) -> Vec<fmt::AdvanceRow> {
+    let mut by_pos: BTreeMap<(i64, bool), Vec<RateItem>> = BTreeMap::new();
+    for r in rows.iter().filter(|r| r.table == table) {
+        by_pos
+            .entry((r.place_of_supply, r.intra_state))
+            .or_default()
+            .push(RateItem {
+                rate_bp: r.rate_bp,
+                taxable_paise: r.totals.taxable_paise,
+                igst_paise: r.totals.igst_paise,
+                cgst_paise: r.totals.cgst_paise,
+                sgst_paise: r.totals.sgst_paise,
+                cess_paise: r.totals.cess_paise,
+            });
+    }
+    by_pos
+        .into_iter()
+        .map(|((pos, intra), items)| fmt::AdvanceRow {
+            pos: u8::try_from(pos).unwrap_or(0),
+            intra_state: intra,
+            items,
+        })
+        .collect()
+}
+
 /// Taxable lines grouped by rate (SGST and UTGST together).
 fn rate_items(lines: &[SalesLineRecord]) -> Vec<RateItem> {
     let mut by_rate: BTreeMap<i64, RateItem> = BTreeMap::new();
@@ -478,7 +602,7 @@ pub(crate) struct Built {
 
 pub(crate) fn build(
     reg: &RegistrationRecord,
-    docs: &[Doc],
+    docs: &ReturnSales,
     period: Period,
     today: NaiveDate,
 ) -> Built {
@@ -1030,6 +1154,32 @@ pub(crate) fn build(
     }
     exceptions.sort_by_key(|e| if e.severity == "error" { 0 } else { 1 });
 
+    // Tables 11A and 11B: tax on advances.
+    let advances = advance_rows(reg, &docs.advances, period);
+    for (key, title, table) in [
+        ("at", "Advances received", "11A"),
+        ("atadj", "Advances adjusted or refunded", "11B"),
+    ] {
+        let rows: Vec<&AdvanceRowView> = advances.iter().filter(|r| r.table == table).collect();
+        if rows.is_empty() {
+            continue;
+        }
+        let totals = rows
+            .iter()
+            .fold(TaxTotals::default(), |t, r| add_totals(t, r.totals, 1));
+        sections.push(SectionSummary {
+            key,
+            title,
+            table,
+            count: rows.iter().map(|r| r.vouchers.len()).sum(),
+            totals,
+            value_paise: totals.taxable_paise + totals.tax_paise,
+        });
+    }
+    portal.at = portal_advances(&advances, "11A");
+    portal.txpd = portal_advances(&advances, "11B");
+    let advance_totals = net_advances(&advances);
+
     let view = Gstr1View {
         registration_id: reg.id.clone(),
         gstin: reg.gstin.clone(),
@@ -1091,6 +1241,8 @@ pub(crate) fn build(
             .collect(),
         series: series_view,
         exceptions,
+        advances,
+        advance_totals,
     };
     Built { view, portal }
 }
@@ -1122,7 +1274,8 @@ impl<S: Store> AppCore<S> {
         &self,
         uow: &mut S::Uow,
         org_id: &str,
-    ) -> AppResult<Vec<Doc>> {
+    ) -> AppResult<ReturnSales> {
+        let advances = self.load_advance_events(uow, org_id).await?;
         let mut out = Vec::new();
         for d in uow.list_sales(org_id).await? {
             let lines = if d.status == "issued" {
@@ -1132,7 +1285,10 @@ impl<S: Store> AppCore<S> {
             };
             out.push((d, lines));
         }
-        Ok(out)
+        Ok(ReturnSales {
+            docs: out,
+            advances,
+        })
     }
 
     pub(crate) async fn return_registration(

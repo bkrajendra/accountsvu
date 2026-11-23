@@ -12,6 +12,7 @@ import {
   type SalesDocumentInput,
   type SalesDocumentView,
   type TaxCategory,
+  type TaxOverrideInput,
 } from "../../lib/api";
 import { formatPaise, formatRate, paiseToInput } from "../../lib/format";
 import { STATES, stateName } from "../../lib/gst";
@@ -23,6 +24,7 @@ import { Combobox } from "../../components/Combobox";
 import { CellInput, useDebounced } from "../../components/editor";
 import { Dialog } from "../../components/Dialog";
 import { WarningList, documentWarnings, rateLabel, warningsFor } from "../../components/TaxWarnings";
+import { TaxLink, TaxOverrideRow, overrideFrom } from "../../components/TaxOverride";
 
 interface LineDraft {
   key: string;
@@ -35,6 +37,8 @@ interface LineDraft {
   discount: string;
   /** "taxable:18", "exempt", "nil_rated" or "non_gst". */
   tax: string;
+  /** Tax entered by hand; null uses the calculated tax. */
+  override: TaxOverrideInput | null;
 }
 
 interface Draft {
@@ -50,11 +54,12 @@ interface Draft {
   reason: string;
   notes: string;
   lines: LineDraft[];
+  taxOverrideReason: string;
 }
 
 const newKey = () => crypto.randomUUID();
 const percent = (bp: number) => formatRate(bp).replace("%", "");
-const blankLine = (): LineDraft => ({ key: newKey(), itemId: null, description: "", hsnSac: "", unit: "", quantity: "1", unitPrice: "", discount: "", tax: "taxable:18" });
+const blankLine = (): LineDraft => ({ key: newKey(), itemId: null, description: "", hsnSac: "", unit: "", quantity: "1", unitPrice: "", discount: "", tax: "taxable:18", override: null });
 
 function taxOf(category: TaxCategory, bp: number): string {
   return category === "taxable" ? `taxable:${percent(bp)}` : category;
@@ -73,6 +78,7 @@ function fromView(v: SalesDocumentView, asCreditNote = false): Draft {
     originalDocumentId: asCreditNote ? v.id : (v.originalDocumentId ?? ""),
     reason: asCreditNote ? "" : (v.reason ?? ""),
     notes: asCreditNote ? "" : (v.notes ?? ""),
+    taxOverrideReason: asCreditNote ? "" : (v.taxOverrideReason ?? ""),
     lines: v.lines.map((l) => ({
       key: newKey(),
       itemId: l.itemId,
@@ -83,6 +89,7 @@ function fromView(v: SalesDocumentView, asCreditNote = false): Draft {
       unitPrice: paiseToInput(l.unitPricePaise) || "0",
       discount: paiseToInput(l.discountPaise),
       tax: taxOf(l.taxCategory, l.gstRateBp),
+      override: !asCreditNote && l.computedTaxPaise != null ? overrideFrom(l) : null,
     })),
   };
 }
@@ -106,6 +113,7 @@ function toInput(d: Draft): SalesDocumentInput {
     originalDocumentId: d.originalDocumentId || undefined,
     reason: d.reason || undefined,
     notes: d.notes || undefined,
+    taxOverrideReason: kept.some((i) => d.lines[i].override) ? d.taxOverrideReason || undefined : undefined,
     lines: kept
       .map((i) => d.lines[i])
       .map((l) => {
@@ -120,6 +128,7 @@ function toInput(d: Draft): SalesDocumentInput {
           discount: l.discount || undefined,
           taxCategory: category as TaxCategory,
           gstRate: rate,
+          taxOverride: l.override ?? undefined,
         };
       }),
   };
@@ -166,6 +175,7 @@ export function SalesEditor() {
           originalDocumentId: "",
           reason: "",
           notes: "",
+          taxOverrideReason: "",
           lines: [blankLine()],
         };
   return <Editor key={id ?? fromId ?? "new"} initial={initial} existing={existing} original={original} />;
@@ -306,7 +316,10 @@ function Editor({ initial, existing, original }: { initial: Draft; existing?: Sa
     { value: "nil_rated", label: "Nil-rated" },
     { value: "non_gst", label: "Non-GST" },
   ];
-  const lineErrors = (i: number) => Object.entries(err).filter(([k]) => k.startsWith(`lines.${i}.`)).map(([, m]) => m);
+  const lineErrors = (i: number) =>
+    Object.entries(err)
+      .filter(([k]) => k.startsWith(`lines.${i}.`) && !k.startsWith(`lines.${i}.taxOverride`))
+      .map(([, m]) => m);
   const title = existing ? `Edit draft ${DOC_TYPE_LABEL[d.docType].toLowerCase()}` : isCredit ? "New credit note" : `New ${DOC_TYPE_LABEL[d.docType].toLowerCase()}`;
 
   return (
@@ -483,7 +496,10 @@ function Editor({ initial, existing, original }: { initial: Draft; existing?: Sa
                           ))}
                         </Select>
                       </td>
-                      <td className="num px-2 py-2 pt-4 text-right font-medium">{lc ? formatPaise(lc.amountPaise) : <span className="text-subtle">—</span>}</td>
+                      <td className="num px-2 py-2 pt-4 text-right font-medium">
+                        {lc ? formatPaise(lc.amountPaise) : <span className="text-subtle">—</span>}
+                        {!l.override && <TaxLink calc={lc} edited={false} line={i + 1} onOpen={() => lc && setLine(i, { override: overrideFrom(lc) })} />}
+                      </td>
                       <td className="py-2 pr-2 pt-3">
                         <button
                           type="button"
@@ -496,6 +512,18 @@ function Editor({ initial, existing, original }: { initial: Draft; existing?: Sa
                         </button>
                       </td>
                     </tr>,
+                    l.override && (
+                      <TaxOverrideRow
+                        key={`${l.key}-tax`}
+                        line={i + 1}
+                        calc={lc}
+                        kind={calc?.supplyKind}
+                        value={l.override}
+                        error={Object.entries(err).find(([k]) => k.startsWith(`lines.${i}.taxOverride`))?.[1]}
+                        colSpan={8}
+                        onChange={(v) => setLine(i, { override: v })}
+                      />
+                    ),
                     (errs.length > 0 || warns.length > 0) && (
                       <tr key={`${l.key}-err`}>
                         <td />
@@ -521,6 +549,26 @@ function Editor({ initial, existing, original }: { initial: Draft; existing?: Sa
             </div>
             {err.lines && <p className="flex items-center gap-1.5 px-4 pb-3 text-[12.5px] text-danger" role="alert"><AlertCircle size={13} /> {err.lines}</p>}
           </Card>
+
+          {d.lines.some((l) => l.override) && (
+            <Card className="p-5">
+              <Field
+                label="Why the tax was changed"
+                error={err.taxOverrideReason}
+                hint="Kept with the document and in the audit log. Only an owner or accountant can issue it."
+              >
+                {(p) => (
+                  <TextInput
+                    id={p.id}
+                    invalid={p.invalid}
+                    value={d.taxOverrideReason}
+                    placeholder="e.g. as agreed on the purchase order"
+                    onChange={(e) => set("taxOverrideReason", e.target.value)}
+                  />
+                )}
+              </Field>
+            </Card>
+          )}
 
           <Card className="p-5">
             <Field label="Notes" optional error={err.notes}>

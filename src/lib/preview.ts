@@ -78,6 +78,8 @@ import type {
   StatementMapping,
   StatementPreview,
   VoucherInput,
+  PartyAdvance,
+  AdvanceRow,
   VoucherType,
   VoucherView,
   ItcStatus,
@@ -98,6 +100,7 @@ import type {
   SalesDocumentView,
   SalesLine,
   SalesLineInput,
+  TaxOverrideInput,
   SupplyKind,
   TotalsCalc,
   OrganisationInput,
@@ -687,7 +690,7 @@ function calcLine(l: SalesLineInput, kind: SupplyKind, taxFree: boolean, inclusi
   const amount = Math.round(qty * price) - (toPaise(l.discount) ?? 0);
   const bp = l.taxCategory === "taxable" && !taxFree ? toBp(l.gstRate) : 0;
   const taxable = inclusive && bp ? Math.round((amount * 10000) / (10000 + bp)) : amount;
-  const c: LineCalc = { amountPaise: amount, taxablePaise: taxable, cgstPaise: 0, sgstPaise: 0, utgstPaise: 0, igstPaise: 0, cessPaise: 0, totalPaise: 0 };
+  const c: LineCalc = { amountPaise: amount, taxablePaise: taxable, cgstPaise: 0, sgstPaise: 0, utgstPaise: 0, igstPaise: 0, cessPaise: 0, totalPaise: 0, computedTaxPaise: null };
   if (kind === "inter_state") c.igstPaise = Math.round((taxable * bp) / 10000);
   else {
     const half = Math.round((taxable * bp) / 20000);
@@ -695,9 +698,61 @@ function calcLine(l: SalesLineInput, kind: SupplyKind, taxFree: boolean, inclusi
     if (kind === "intra_state") c.sgstPaise = half;
     else c.utgstPaise = half;
   }
-  c.totalPaise = taxable + c.cgstPaise + c.sgstPaise + c.utgstPaise + c.igstPaise;
+  // Tax entered by hand replaces the heads when it is valid and differs.
+  const calculated = c.cgstPaise + c.sgstPaise + c.utgstPaise + c.igstPaise + c.cessPaise;
+  if (l.taxOverride && !overrideProblem(c, l.taxOverride, kind)) {
+    const t = enteredTax(l.taxOverride);
+    if (t.cgst + t.sgst + t.igst + t.cess !== calculated || t.igst !== c.igstPaise || t.cgst !== c.cgstPaise) {
+      c.cgstPaise = t.cgst;
+      c.sgstPaise = kind === "intra_state" ? t.sgst : 0;
+      c.utgstPaise = kind === "intra_union_territory" ? t.sgst : 0;
+      c.igstPaise = t.igst;
+      c.cessPaise = t.cess;
+      c.computedTaxPaise = calculated;
+    }
+  }
+  c.totalPaise = taxable + c.cgstPaise + c.sgstPaise + c.utgstPaise + c.igstPaise + c.cessPaise;
   return c;
 }
+
+const enteredTax = (o: TaxOverrideInput) => ({ cgst: toPaise(o.cgst) ?? 0, sgst: toPaise(o.sgst) ?? 0, igst: toPaise(o.igst) ?? 0, cess: toPaise(o.cess) ?? 0 });
+
+/** Same rules as `gst_engine::override_line_tax`. */
+function overrideProblem(c: LineCalc, o: TaxOverrideInput, kind: SupplyKind): string | null {
+  if (!(c.cgstPaise + c.sgstPaise + c.utgstPaise + c.igstPaise + c.cessPaise)) return "This line carries no GST, so there is no tax to change.";
+  const t = enteredTax(o);
+  if ([t.cgst, t.sgst, t.igst, t.cess].some((v) => v < 0)) return "Tax can't be negative.";
+  if (kind === "inter_state") {
+    if (t.cgst || t.sgst) return "A supply between states is taxed as IGST, not CGST and SGST.";
+  } else {
+    if (t.igst) return "A supply within the state is taxed as CGST and SGST, not IGST.";
+    if (t.cgst !== t.sgst) return "CGST and SGST must be equal.";
+  }
+  if (t.cgst + t.sgst + t.igst + t.cess > c.taxablePaise) return "The tax can't be more than the taxable value.";
+  return null;
+}
+
+/** Problems with tax entered by hand, and whether any line's tax was changed. */
+function checkOverrides(lines: SalesLineInput[], kind: SupplyKind, taxFree: boolean, inclusive: boolean, reason?: string): { errors: [string, string][]; changed: boolean } {
+  const errors: [string, string][] = [];
+  let changed = false;
+  lines.forEach((l, i) => {
+    if (!l.taxOverride) return;
+    const base = calcLine({ ...l, taxOverride: undefined }, kind, taxFree, inclusive);
+    if (!base) return;
+    const problem = overrideProblem(base, l.taxOverride, kind);
+    if (problem) errors.push([`lines.${i}.taxOverride`, problem]);
+    else if (calcLine(l, kind, taxFree, inclusive)?.computedTaxPaise != null) changed = true;
+  });
+  if (changed && !reason?.trim()) errors.push(["taxOverrideReason", "Say why the tax was entered by hand."]);
+  return { errors, changed };
+}
+
+const overrideStamp = (changed: boolean, reason?: string) => ({
+  taxOverrideReason: changed ? (reason?.trim() ?? null) : null,
+  taxOverrideBy: changed ? "Owner" : null,
+  taxOverrideAt: changed ? now() : null,
+});
 
 // Rule pack sample for the preview (the real pack lives in crates/gst-engine/rules).
 const PREVIEW_PACK = "2026.11.1";
@@ -967,7 +1022,21 @@ function previewWorkpaper(regId: string, period: string): Gstr1 {
   });
   sections.push({ key: "docs", title: "Documents issued", table: "13", count: seriesRows.reduce((a, s) => a + s.total, 0), totals: zeroTotals(), valuePaise: 0 });
   exceptions.sort((a, b) => (a.severity === "error" ? 0 : 1) - (b.severity === "error" ? 0 : 1));
+  const advances = advanceRows(reg.id, from, to);
+  const advanceTotals = zeroTotals();
+  for (const [key, title, table] of [["at", "Advances received", "11A"], ["atadj", "Advances adjusted or refunded", "11B"]] as const) {
+    const rows = advances.filter((r) => r.table === table);
+    if (!rows.length) continue;
+    const t = zeroTotals();
+    for (const r of rows) {
+      addTotals(t, r.totals);
+      addTotals(advanceTotals, r.totals, table === "11A" ? 1 : -1);
+    }
+    sections.splice(sections.length - 2, 0, { key, title, table, count: rows.reduce((a, r) => a + r.vouchers.length, 0), totals: t, valuePaise: t.taxablePaise + t.taxPaise });
+  }
   return {
+    advances,
+    advanceTotals,
     registrationId: reg.id,
     gstin: reg.gstin,
     stateName: stateName(reg.stateCode),
@@ -978,7 +1047,7 @@ function previewWorkpaper(regId: string, period: string): Gstr1 {
     dueDate: gstr1Due(period),
     status: periodStatus(period),
     rulePackVersion: PREVIEW_PACK,
-    formatVersion: "gstr1-json/1",
+    formatVersion: "gstr1-json/2",
     sections,
     totals: net,
     documents,
@@ -1042,6 +1111,10 @@ function previewGstr3bOne(regId: string, period: string, broughtForward: Heads):
     r.taxablePaise += taxable;
     r.tax = hPlus(r.tax, tax);
   };
+  for (const r of g1.advances) {
+    const sign = r.table === "11A" ? 1 : -1;
+    add(outward, "a", sign * r.totals.taxablePaise, hPlus(H0(), { igst: r.totals.igstPaise, cgst: r.totals.cgstPaise, sgst: r.totals.sgstPaise, cess: r.totals.cessPaise }, sign));
+  }
   const interState = new Map<number, Gstr3b["interState"][number]>();
   for (const d of salesDocs.filter((x) => x.status === "issued" && ours(x))) {
     const sign = d.docType === "credit_note" ? -1 : 1;
@@ -1627,8 +1700,9 @@ function calculate(input: SalesDocumentInput): SalesCalculation {
     t.sgstPaise += c.sgstPaise;
     t.utgstPaise += c.utgstPaise;
     t.igstPaise += c.igstPaise;
+    t.cessPaise += c.cessPaise;
   }
-  const exact = t.taxablePaise + t.cgstPaise + t.sgstPaise + t.utgstPaise + t.igstPaise;
+  const exact = t.taxablePaise + t.cgstPaise + t.sgstPaise + t.utgstPaise + t.igstPaise + t.cessPaise;
   t.totalPaise = org?.roundToRupee ? Math.round(exact / 100) * 100 : exact;
   t.roundOffPaise = t.totalPaise - exact;
   const sr = series.find((x) => x.isDefault && x.documentType === input.docType && x.gstRegistrationId === (s.reg?.id ?? null));
@@ -1692,6 +1766,8 @@ function writeSales(id: string | null, input: SalesDocumentInput): SalesDocument
   if (e.length) fail(e);
   const s = supplyFor(input);
   const c = calculate(input);
+  const ovr = checkOverrides(input.lines, s.kind ?? "intra_state", input.docType === "bill_of_supply" || input.zeroRated, input.pricesIncludeTax, input.taxOverrideReason);
+  if (ovr.errors.length) fail(ovr.errors);
   const existing = salesDocs.find((x) => x.id === id);
   if (existing && existing.status !== "draft") throw { code: "conflict", message: "This document has been issued and can't be edited.", fields: [] } satisfies Fail;
   const docId = existing?.id ?? crypto.randomUUID();
@@ -1704,7 +1780,7 @@ function writeSales(id: string | null, input: SalesDocumentInput): SalesDocument
     pricesIncludeTax: input.pricesIncludeTax, originalDocumentId: input.originalDocumentId ?? null, reason: input.reason ?? null,
     notes: input.notes ?? null, ...c.totals, paidPaise: 0, journalEntryId: null, cancelEntryId: null, cancelReason: null,
     rowVersion: (existing?.rowVersion ?? 0) + 1, createdAt: existing?.createdAt ?? now(), updatedAt: now(), issuedAt: null, cancelledAt: null,
-    rulePackVersion: PREVIEW_PACK,
+    rulePackVersion: PREVIEW_PACK, ...overrideStamp(ovr.changed, input.taxOverrideReason),
     lines: input.lines.map((l, i) => ({
       id: crypto.randomUUID(), documentId: docId, lineNo: i + 1, itemId: l.itemId ?? null,
       description: l.description || item(l.itemId)?.name || "", hsnSac: l.hsnSac ?? item(l.itemId)?.hsnSac ?? null, unit: l.unit ?? item(l.itemId)?.unit ?? null,
@@ -1795,8 +1871,9 @@ function calculatePurchase(input: PurchaseDocumentInput): PurchaseCalculation {
     t.sgstPaise += c.sgstPaise;
     t.utgstPaise += c.utgstPaise;
     t.igstPaise += c.igstPaise;
+    t.cessPaise += c.cessPaise;
   }
-  const tax = t.cgstPaise + t.sgstPaise + t.utgstPaise + t.igstPaise;
+  const tax = t.cgstPaise + t.sgstPaise + t.utgstPaise + t.igstPaise + t.cessPaise;
   const base = t.taxablePaise + (input.reverseCharge ? 0 : tax);
   t.totalPaise = org?.roundToRupee ? Math.round(base / 100) * 100 : base;
   t.roundOffPaise = t.totalPaise - base;
@@ -1862,6 +1939,8 @@ function writePurchase(id: string | null, input: PurchaseDocumentInput) {
   if (e.length) fail(e);
   const s = purchaseSupply(input);
   const c = calculatePurchase(input);
+  const ovr = checkOverrides(input.lines.map((l) => ({ ...l })), s.kind, false, input.pricesIncludeTax, input.taxOverrideReason);
+  if (ovr.errors.length) fail(ovr.errors);
   const existing = purchaseDocs.find((x) => x.id === id);
   if (existing && existing.status !== "draft") throw { code: "conflict", message: "This purchase is recorded and can't be edited.", fields: [] } satisfies Fail;
   const docId = existing?.id ?? crypto.randomUUID();
@@ -1878,9 +1957,10 @@ function writePurchase(id: string | null, input: PurchaseDocumentInput) {
     paymentMode: mode as PaymentMode, originalDocumentId: input.originalDocumentId ?? null, reason: input.reason ?? null, notes: input.notes ?? null,
     ...c.totals, paidPaise: 0, journalEntryId: null, cancelEntryId: null, cancelReason: null, rowVersion: (existing?.rowVersion ?? 0) + 1,
     createdAt: existing?.createdAt ?? now(), updatedAt: now(), recordedAt: null, cancelledAt: null, rulePackVersion: PREVIEW_PACK,
+    ...overrideStamp(ovr.changed, input.taxOverrideReason),
     lines: input.lines.map((l, i) => {
       const lc = c.lines[i]!;
-      const tax = lc.cgstPaise + lc.sgstPaise + lc.utgstPaise + lc.igstPaise;
+      const tax = lc.cgstPaise + lc.sgstPaise + lc.utgstPaise + lc.igstPaise + lc.cessPaise;
       const itc = (tax ? (l.itcStatus ?? "pending") : "na") as ItcStatus;
       return {
         id: crypto.randomUUID(), documentId: docId, lineNo: i + 1, itemId: l.itemId ?? null, accountId: l.accountId, description: l.description || items.find((x) => x.id === l.itemId)?.name || "",
@@ -2004,7 +2084,43 @@ async function purchaseCommand(command: string, args: Record<string, any>): Prom
 // ---------------------------------------------------------------------------
 
 type MoneyRec = Omit<MoneyAccount, "ledgerCode" | "systemRole" | "balancePaise" | "openingBalancePaise" | "unmatchedLines" | "lastStatementDate" | "statementBalancePaise">;
-type VoucherRec = Omit<VoucherView, "moneyAccountName" | "moneyAccountKind" | "partyName" | "counterAccountName" | "allocations" | "allocatedPaise" | "onAccountPaise" | "statementLineId"> & { allocations: { documentKind: "sales" | "purchase"; documentId: string; amountPaise: number }[] };
+type VoucherRec = Omit<VoucherView, "moneyAccountName" | "moneyAccountKind" | "partyName" | "counterAccountName" | "allocations" | "allocatedPaise" | "onAccountPaise" | "statementLineId" | "refunds" | "refundedPaise" | "refundOfNumber" | "advanceTax" | "advanceAdjustments"> & {
+  allocations: { documentKind: "sales" | "purchase"; documentId: string; amountPaise: number; allocatedOn: string | null }[];
+  tax: AdvTax | null;
+};
+// Tax on an advance (Phase 2.6) and the parts of it used up later.
+type AdvParts = { gross: number; taxable: number; igst: number; cgst: number; sgst: number };
+type AdvTax = AdvParts & { registrationId: string; placeOfSupply: number; rateBp: number };
+type AdvAdjustment = AdvParts & { id: string; voucherId: string; reason: "invoice" | "refund"; refundVoucherId: string | null; adjustDate: string; status: "posted" | "cancelled" };
+let advAdjustments: AdvAdjustment[] = [];
+const advTaxOf = (p: AdvParts) => p.igst + p.cgst + p.sgst;
+function advParts(gross: number, rateBp: number, intra: boolean): AdvParts {
+  const taxable = Math.round((gross * 10000) / (10000 + rateBp));
+  if (intra) {
+    const half = Math.round((taxable * rateBp) / 20000);
+    return { gross, taxable: gross - 2 * half, igst: 0, cgst: half, sgst: half };
+  }
+  const igst = Math.round((taxable * rateBp) / 10000);
+  return { gross, taxable: gross - igst, igst, cgst: 0, sgst: 0 };
+}
+function advLeft(v: VoucherRec): AdvParts | null {
+  if (!v.tax) return null;
+  const used = advAdjustments.filter((a) => a.voucherId === v.id && a.status === "posted");
+  const minus = (k: keyof AdvParts) => v.tax![k] - used.reduce((x, a) => x + a[k], 0);
+  return { gross: minus("gross"), taxable: minus("taxable"), igst: minus("igst"), cgst: minus("cgst"), sgst: minus("sgst") };
+}
+function advTake(v: VoucherRec, gross: number): AdvParts {
+  const left = advLeft(v)!;
+  if (gross >= left.gross) return left;
+  const p = advParts(gross, v.tax!.rateBp, v.tax!.igst === 0);
+  const t = { ...p, igst: Math.min(p.igst, left.igst), cgst: Math.min(p.cgst, left.cgst), sgst: Math.min(p.sgst, left.sgst) };
+  return { ...t, taxable: gross - advTaxOf(t) };
+}
+const refundsOf = (vid: string) => vouchers.filter((r) => r.refundOfId === vid && r.status === "posted");
+function onAccount(v: VoucherRec) {
+  if (!v.partyId || v.purpose !== "settlement" || v.status !== "posted") return 0;
+  return v.amountPaise - v.allocations.reduce((a, x) => a + x.amountPaise, 0) - refundsOf(v.id).reduce((a, r) => a + r.amountPaise, 0);
+}
 type LineRec = Omit<StatementLine, "matched" | "suggestions">;
 
 let moneyAccounts: MoneyRec[] = [];
@@ -2119,15 +2235,26 @@ function voucherView(vid: string): VoucherView {
     return { ...a, number: s?.number ?? p?.supplierInvoiceNumber ?? p?.number ?? null, docDate: s?.docDate ?? p?.docDate ?? null };
   });
   const allocated = allocations.reduce((a, x) => a + x.amountPaise, 0);
+  const refunds = refundsOf(v.id);
+  const reg = v.tax ? regs.find((r) => r.id === v.tax!.registrationId) : undefined;
+  const left = advLeft(v);
+  const { tax, ...rest } = v;
   return {
-    ...v,
+    ...rest,
+    refunds: refunds.map((r) => ({ voucherId: r.id, voucherType: r.voucherType, number: r.number, voucherDate: r.voucherDate, amountPaise: r.amountPaise })),
+    refundedPaise: refunds.reduce((a, r) => a + r.amountPaise, 0),
+    refundOfNumber: vouchers.find((x) => x.id === v.refundOfId)?.number ?? null,
+    advanceTax: tax
+      ? { registrationId: tax.registrationId, gstin: reg?.gstin ?? "", placeOfSupply: tax.placeOfSupply, placeName: stateName(tax.placeOfSupply), rateBp: tax.rateBp, grossPaise: tax.gross, taxablePaise: tax.taxable, taxPaise: advTaxOf(tax), remainingTaxPaise: left ? advTaxOf(left) : 0 }
+      : null,
+    advanceAdjustments: advAdjustments.filter((a) => a.voucherId === v.id).map((a) => ({ id: a.id, reason: a.reason, adjustDate: a.adjustDate, grossPaise: a.gross, taxPaise: advTaxOf(a), status: a.status })),
     moneyAccountName: m.name,
     moneyAccountKind: m.kind,
     partyName: parties.find((p) => p.id === v.partyId)?.name ?? null,
     counterAccountName: accounts.find((a) => a.id === v.counterAccountId)?.name ?? null,
     allocations,
     allocatedPaise: allocated,
-    onAccountPaise: v.partyId ? v.amountPaise - allocated : 0,
+    onAccountPaise: onAccount(v),
     statementLineId: statementLines.find((l) => l.journalEntryId === v.journalEntryId)?.id ?? null,
   };
 }
@@ -2150,9 +2277,36 @@ function createVoucher(input: VoucherInput): VoucherView {
     const d = open.find((x) => x.id === a.documentId);
     if (!d) e.push([`allocations.${i}.amount`, "This document is already settled or isn't this party's."]);
     else if (amt > d.outstandingPaise) e.push([`allocations.${i}.amount`, "More than is outstanding on this document."]);
-    else allocs.push({ documentKind: d.documentKind, documentId: d.id, amountPaise: amt });
+    else allocs.push({ documentKind: d.documentKind, documentId: d.id, amountPaise: amt, allocatedOn: null });
   });
   if (amount && allocs.reduce((a, x) => a + x.amountPaise, 0) > amount) e.push(["allocations", "The amounts settled add up to more than the total."]);
+  const purpose = input.purpose ?? "settlement";
+  const party = parties.find((p) => p.id === input.partyId);
+  let refundOf: VoucherRec | undefined;
+  if (purpose === "refund") {
+    if (!party) e.push(["partyId", "A refund goes to or comes from a party."]);
+    else if (input.voucherType === "payment" ? party.kind === "supplier" : party.kind === "customer")
+      e.push(["partyId", input.voucherType === "payment" ? "Refunds are paid back to customers." : "Refunds come back from suppliers."]);
+    if (input.allocations.length) e.push(["allocations", "A refund doesn't settle invoices or bills."]);
+    if (input.refundOfId) {
+      refundOf = vouchers.find((x) => x.id === input.refundOfId && x.status === "posted" && x.partyId === input.partyId && x.voucherType !== input.voucherType);
+      if (!refundOf) e.push(["refundOfId", "Choose an advance of this party that has something left."]);
+      else if (amount && amount > onAccount(refundOf)) e.push(["amount", `Only ₹${(onAccount(refundOf) / 100).toFixed(2)} is left of ${refundOf.number}.`]);
+    }
+  }
+  let tax: AdvTax | null = null;
+  if (input.advanceTax) {
+    if (input.voucherType !== "receipt" || !party || purpose !== "settlement") e.push(["advanceTax", "Tax on advances applies to money received from customers."]);
+    else {
+      const gross = (amount ?? 0) - allocs.reduce((a, x) => a + x.amountPaise, 0);
+      const reg = regs.find((r) => r.id === input.advanceTax!.registrationId);
+      if (!reg) e.push(["advanceTax.registrationId", "Choose the GSTIN the advance was received under."]);
+      if (!input.advanceTax.rateBp) e.push(["advanceTax.rateBp", "Choose a GST rate."]);
+      if (gross <= 0) e.push(["advanceTax", "Nothing is left as an advance to pay tax on: the whole amount settles invoices."]);
+      else if (reg && input.advanceTax.rateBp)
+        tax = { ...advParts(gross, input.advanceTax.rateBp, reg.stateCode === input.advanceTax.placeOfSupply), registrationId: reg.id, placeOfSupply: input.advanceTax.placeOfSupply, rateBp: input.advanceTax.rateBp };
+    }
+  }
   const line = input.statementLineId ? statementLines.find((l) => l.id === input.statementLineId) : undefined;
   if (line && amount) {
     const signed = line.depositPaise - line.withdrawalPaise;
@@ -2169,13 +2323,68 @@ function createVoucher(input: VoucherInput): VoucherView {
     partyId: input.partyId || null, counterAccountId: input.counterAccountId || null, amountPaise: amount!,
     mode: m!.kind === "cash" ? "cash" : (input.mode ?? "neft"), reference: blank(input.reference), narration: blank(input.narration),
     journalEntryId: id(), cancelEntryId: null, cancelReason: null, rowVersion: 1, createdAt: now(), updatedAt: now(), cancelledAt: null,
-    allocations: allocs,
+    allocations: allocs, purpose, refundOfId: refundOf?.id ?? null, tax,
   };
+  if (refundOf?.tax) advAdjustments.push({ ...advTake(refundOf, v.amountPaise), id: id(), voucherId: refundOf.id, reason: "refund", refundVoucherId: v.id, adjustDate: v.voucherDate, status: "posted" });
   vouchers.push(v);
   for (const a of allocs) adjustPaid(a.documentKind, a.documentId, a.amountPaise);
   if (line) statementLines = statementLines.map((l) => (l.id === line.id ? { ...l, status: "matched", journalEntryId: v.journalEntryId, matchedAt: now(), matchedBy: "owner" } : l));
   log(`money_voucher.${type}`, v.id, v);
   return voucherView(v.id);
+}
+
+function adjustAdvance(vid: string, input: { date: string; allocations: { documentId: string; amount: string }[] }): VoucherView {
+  const v = vouchers.find((x) => x.id === vid) ?? nf("Receipt or payment not found");
+  const e: [string, string][] = [];
+  if (!input.date) e.push(["date", "Enter a valid date."]);
+  else if (input.date > today()) e.push(["date", "The date can't be in the future."]);
+  else if (input.date < v.voucherDate) e.push(["date", "The date can't be before the receipt or payment."]);
+  const open = openDocs(v.partyId!, v.voucherType);
+  const chosen: { d: (typeof open)[number]; amt: number }[] = [];
+  input.allocations.forEach((a, i) => {
+    const amt = toPaise(a.amount) ?? 0;
+    if (!amt) return;
+    const d = open.find((x) => x.id === a.documentId);
+    if (!d) e.push([`allocations.${i}.amount`, "This document is already settled or isn't this party's."]);
+    else if (amt > d.outstandingPaise) e.push([`allocations.${i}.amount`, "More than is outstanding on this document."]);
+    else if (input.date && d.docDate > input.date) e.push([`allocations.${i}.amount`, "The document is dated after the adjustment date."]);
+    else chosen.push({ d, amt });
+  });
+  if (!chosen.length && !e.length) e.push(["allocations", "Enter an amount against at least one document."]);
+  if (chosen.reduce((a, c) => a + c.amt, 0) > onAccount(v)) e.push(["allocations", "That adds up to more than is left of the advance."]);
+  if (e.length) fail(e);
+  for (const { d, amt } of chosen) {
+    v.allocations.push({ documentKind: d.documentKind, documentId: d.id, amountPaise: amt, allocatedOn: input.date });
+    adjustPaid(d.documentKind, d.id, amt);
+    if (v.tax) advAdjustments.push({ ...advTake(v, amt), id: id(), voucherId: v.id, reason: "invoice", refundVoucherId: null, adjustDate: input.date, status: "posted" });
+  }
+  log("money_voucher.adjusted", v.id, { date: input.date });
+  return voucherView(v.id);
+}
+
+function partyAdvances(partyId: string, voucherType: string): PartyAdvance[] {
+  return vouchers
+    .filter((v) => v.partyId === partyId && v.voucherType === voucherType && onAccount(v) > 0)
+    .sort((a, b) => a.voucherDate.localeCompare(b.voucherDate))
+    .map((v) => ({ voucherId: v.id, number: v.number, voucherDate: v.voucherDate, amountPaise: v.amountPaise, onAccountPaise: onAccount(v), taxedRegistrationId: v.tax?.registrationId ?? null }));
+}
+
+// Tax on advances for GSTR-1 tables 11A/11B.
+function advanceRows(regId: string, from: string, to: string): AdvanceRow[] {
+  const acc = new Map<string, AdvanceRow>();
+  const reg = regs.find((r) => r.id === regId);
+  const add = (table: "11A" | "11B", v: VoucherRec, p: AdvParts) => {
+    const key = `${table}|${v.tax!.placeOfSupply}|${v.tax!.rateBp}`;
+    const row = acc.get(key) ?? { table, placeOfSupply: v.tax!.placeOfSupply, placeName: stateName(v.tax!.placeOfSupply), intraState: v.tax!.placeOfSupply === reg?.stateCode, rateBp: v.tax!.rateBp, totals: zeroTotals(), vouchers: [] };
+    addTotals(row.totals, { taxablePaise: p.taxable, igstPaise: p.igst, cgstPaise: p.cgst, sgstPaise: p.sgst, cessPaise: 0 });
+    if (!row.vouchers.some((x) => x.id === v.id)) row.vouchers.push({ id: v.id, number: v.number, docType: "receipt" });
+    acc.set(key, row);
+  };
+  for (const v of vouchers.filter((x) => x.tax?.registrationId === regId && x.status === "posted")) {
+    if (v.voucherDate >= from && v.voucherDate <= to) add("11A", v, v.tax!);
+    for (const a of advAdjustments.filter((x) => x.voucherId === v.id && x.status === "posted" && x.adjustDate >= from && x.adjustDate <= to)) add("11B", v, a);
+  }
+  return [...acc.values()].sort((a, b) => a.table.localeCompare(b.table) || a.placeOfSupply - b.placeOfSupply);
 }
 
 // -- Statements ---------------------------------------------------------------
@@ -2380,7 +2589,7 @@ function bankingCommand(command: string, args: Record<string, any>): unknown {
           id: v.id, voucherType: v.voucherType, status: v.status, number: v.number, voucherDate: v.voucherDate,
           moneyAccountId: v.moneyAccountId, moneyAccountName: moneyAccounts.find((m) => m.id === v.moneyAccountId)?.name ?? "",
           partyId: v.partyId, counterparty: parties.find((p) => p.id === v.partyId)?.name ?? accounts.find((a) => a.id === v.counterAccountId)?.name ?? "",
-          amountPaise: v.amountPaise, mode: v.mode, reference: v.reference,
+          amountPaise: v.amountPaise, mode: v.mode, reference: v.reference, purpose: v.purpose,
         }));
     case "get_voucher":
       return voucherView(args.id);
@@ -2390,12 +2599,19 @@ function bankingCommand(command: string, args: Record<string, any>): unknown {
         .flatMap((v) => v.allocations.filter((a) => a.documentKind === args.documentKind && a.documentId === args.documentId).map((a) => ({ voucherId: v.id, voucherType: v.voucherType, number: v.number, voucherDate: v.voucherDate, amountPaise: a.amountPaise })));
     case "create_voucher":
       return createVoucher(args.input as VoucherInput);
+    case "adjust_advance":
+      return adjustAdvance(args.id, args.input);
+    case "party_advances":
+      return partyAdvances(args.partyId, args.voucherType);
     case "cancel_voucher": {
       const v = vouchers.find((x) => x.id === args.id) ?? nf("Receipt or payment not found");
       if (v.status !== "posted") conflict("This is already cancelled.");
       if (v.rowVersion !== args.expectedVersion) conflict("This record was changed elsewhere. Reload it and try again.");
       if (!String(args.reason ?? "").trim()) fail([["reason", "Give a reason for cancelling."]]);
       if (statementLines.some((l) => l.journalEntryId === v.journalEntryId)) conflict("This is reconciled with a bank statement line. Unmatch it first.");
+      const refund = refundsOf(v.id)[0];
+      if (refund) conflict(`${refund.number} refunds part of this advance. Cancel the refund first.`);
+      advAdjustments = advAdjustments.map((a) => (a.status === "posted" && (a.voucherId === v.id || a.refundVoucherId === v.id) ? { ...a, status: "cancelled" } : a));
       for (const a of v.allocations) adjustPaid(a.documentKind, a.documentId, -a.amountPaise);
       vouchers = vouchers.map((x) => (x.id === v.id ? { ...x, status: "cancelled", cancelEntryId: id(), cancelReason: args.reason, cancelledAt: now(), rowVersion: x.rowVersion + 1 } : x));
       log("money_voucher.cancel", v.id);
@@ -2893,6 +3109,14 @@ function hostCommand(command: string, args: Record<string, any>): unknown {
       const fileName = stem.replace(/[^A-Za-z0-9_-]+/g, "-") + ".pdf";
       return { path: "C:\\Users\\you\\Documents\\" + fileName, fileName, sizeBytes: 48_213 };
     }
+    case "save_voucher_pdf":
+    case "open_voucher_pdf": {
+      const v = vouchers.find((x) => x.id === args.id);
+      if (!v) throw { code: "not_found", message: "Voucher not found", fields: [] } satisfies Fail;
+      if (command === "open_voucher_pdf") return null;
+      const fileName = v.number.replace(/[^A-Za-z0-9_-]+/g, "-") + ".pdf";
+      return { path: "C:\\Users\\you\\Documents\\" + fileName, fileName, sizeBytes: 31_904 };
+    }
     case "open_saved_file":
       return null;
     case "backup_status":
@@ -2940,7 +3164,7 @@ function hostCommand(command: string, args: Record<string, any>): unknown {
       throw { code: "invalid_input", message: "The browser preview can't restart. Restoring runs in the desktop app.", fields: [] } satisfies Fail;
     case "check_update":
       return {
-        currentVersion: "0.2.8",
+        currentVersion: "0.2.9",
         version: "0.3.0",
         date: new Date(Date.now() - 86_400_000).toISOString(),
         notes: "AccountsVU 0.3.0 — sample release notes from the browser preview.",
@@ -2964,7 +3188,7 @@ export async function previewBackend(command: string, args: Record<string, any> 
   if (hosted !== undefined) return hosted;
   switch (command) {
     case "app_health":
-      return { appVersion: "0.2.8", schemaVersion: 12, database: "(browser preview — in memory)", organisationConfigured: !!org };
+      return { appVersion: "0.2.9", schemaVersion: 14, database: "(browser preview — in memory)", organisationConfigured: !!org };
     case "dashboard_summary":
       return {
         salesThisMonth: "0", purchasesThisMonth: "0",

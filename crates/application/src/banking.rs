@@ -16,12 +16,17 @@ use av_persistence::records::{
     OpenDocumentRecord, StatementLineRecord, VoucherAllocationRecord,
 };
 use av_persistence::{
-    AccountRepo, BankingRepo, LedgerQueries, PartyRepo, SalesRepo, Store, UnitOfWork,
+    AccountRepo, BankingRepo, LedgerQueries, PartyRepo, RegistrationRepo, SalesRepo, Store,
+    UnitOfWork,
 };
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 
 use crate::AppCore;
+use crate::advances::{
+    AdvanceAdjustmentView, AdvanceTaxInput, AdvanceTaxView, Parts, adjustment_record, advance_tax,
+    party_role, remaining, supply_kind, take, tax_lines, tax_record,
+};
 use crate::context::{Permission, RequestContext};
 use crate::error::{AppError, AppResult, Errors};
 use crate::import::read_grid;
@@ -120,6 +125,13 @@ pub struct VoucherInput {
     pub allocations: Vec<AllocationInput>,
     /// Match the new voucher to this bank statement line.
     pub statement_line_id: Option<String>,
+    /// `settlement` (default) or `refund`: a payment back to a customer, or
+    /// a receipt back from a supplier.
+    pub purpose: Option<String>,
+    /// The advance a refund gives back (a receipt for a payment refund).
+    pub refund_of_id: Option<String>,
+    /// Pay tax on the part of a receipt left as an advance (services).
+    pub advance_tax: Option<AdvanceTaxInput>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -138,6 +150,7 @@ pub struct VoucherSummary {
     pub amount_paise: i64,
     pub mode: String,
     pub reference: Option<String>,
+    pub purpose: String,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -148,6 +161,8 @@ pub struct AllocationView {
     pub number: Option<String>,
     pub doc_date: Option<String>,
     pub amount_paise: i64,
+    /// Set when adjusted after the voucher.
+    pub allocated_on: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -161,9 +176,17 @@ pub struct VoucherView {
     pub counter_account_name: Option<String>,
     pub allocations: Vec<AllocationView>,
     pub allocated_paise: i64,
-    /// Not allocated to any document: an advance or on-account amount.
+    /// Not allocated to any document or refunded: an advance or on-account
+    /// amount.
     pub on_account_paise: i64,
     pub statement_line_id: Option<String>,
+    /// Refunds given back out of this advance.
+    pub refunds: Vec<SettlementView>,
+    pub refunded_paise: i64,
+    /// For a refund: the advance it gives back.
+    pub refund_of_number: Option<String>,
+    pub advance_tax: Option<AdvanceTaxView>,
+    pub advance_adjustments: Vec<AdvanceAdjustmentView>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1109,11 +1132,12 @@ impl<S: Store> AppCore<S> {
                 amount_paise: v.amount_paise,
                 mode: v.mode,
                 reference: v.reference,
+                purpose: v.purpose,
             })
             .collect())
     }
 
-    async fn load_voucher(
+    pub(crate) async fn load_voucher(
         &self,
         uow: &mut S::Uow,
         org_id: &str,
@@ -1157,9 +1181,16 @@ impl<S: Store> AppCore<S> {
                 number,
                 doc_date,
                 amount_paise: a.amount_paise,
+                allocated_on: a.allocated_on,
             });
         }
         let allocated: i64 = allocations.iter().map(|a| a.amount_paise).sum();
+        let state = self.advance_state(uow, org_id, &v).await?;
+        let (advance_tax, advance_adjustments) = self.advance_views(uow, org_id, &state).await?;
+        let refund_of_number = match &v.refund_of_id {
+            Some(r) => uow.get_voucher(org_id, r).await?.map(|r| r.number),
+            None => None,
+        };
         let statement_line_id = uow
             .statement_line_for_entry(org_id, &v.journal_entry_id)
             .await?
@@ -1169,14 +1200,25 @@ impl<S: Store> AppCore<S> {
             money_account_kind: money.kind,
             party_name,
             counter_account_name,
-            on_account_paise: if v.party_id.is_some() {
-                v.amount_paise - allocated
-            } else {
-                0
-            },
+            on_account_paise: state.on_account,
             allocated_paise: allocated,
             allocations,
             statement_line_id,
+            refunds: state
+                .refunds
+                .iter()
+                .map(|r| SettlementView {
+                    voucher_id: r.id.clone(),
+                    voucher_type: r.voucher_type.clone(),
+                    number: r.number.clone(),
+                    voucher_date: r.voucher_date.clone(),
+                    amount_paise: r.amount_paise,
+                })
+                .collect(),
+            refunded_paise: state.refunded,
+            refund_of_number,
+            advance_tax,
+            advance_adjustments,
             voucher: v,
         })
     }
@@ -1278,6 +1320,17 @@ impl<S: Store> AppCore<S> {
         check_len(&mut e, "reference", &reference, 100);
         let narration = clean(&input.narration);
         check_len(&mut e, "narration", &narration, 500);
+        let purpose = match clean(&input.purpose).as_deref() {
+            None | Some("settlement") => "settlement",
+            Some("refund") => "refund",
+            Some(_) => {
+                e.add(
+                    "purpose",
+                    "Choose whether this settles the account or is a refund.",
+                );
+                "settlement"
+            }
+        };
 
         // Exactly one of party / other account.
         let party_id = clean(&input.party_id);
@@ -1303,6 +1356,65 @@ impl<S: Store> AppCore<S> {
                 }
                 _ => e.add("counterAccountId", "Choose an account."),
             },
+        }
+
+        // Refunds: back to a customer (payment) or from a supplier (receipt),
+        // optionally out of a named advance with something left on it.
+        let mut refund_of = None;
+        if purpose == "refund" {
+            match &party {
+                None => e.add("partyId", "A refund goes to or comes from a party."),
+                Some(p)
+                    if !self
+                        .refund_party_ok(&mut uow, &org.id, &p.id, voucher_type)
+                        .await? =>
+                {
+                    e.add(
+                        "partyId",
+                        if voucher_type == "payment" {
+                            "Refunds are paid back to customers."
+                        } else {
+                            "Refunds come back from suppliers."
+                        },
+                    );
+                }
+                _ => {}
+            }
+            if !input.allocations.is_empty() {
+                e.add("allocations", "A refund doesn't settle invoices or bills.");
+            }
+            if let Some(rid) = clean(&input.refund_of_id) {
+                match uow.get_voucher(&org.id, &rid).await? {
+                    Some(r)
+                        if r.status == "posted"
+                            && r.purpose == "settlement"
+                            && r.party_id == party_id
+                            && r.voucher_type != voucher_type =>
+                    {
+                        let st = self.advance_state(&mut uow, &org.id, &r).await?;
+                        if amount.is_some_and(|a| a > st.on_account) {
+                            e.add(
+                                "amount",
+                                format!(
+                                    "Only ₹{} is left of {}.",
+                                    av_domain::Money::from_paise(st.on_account),
+                                    r.number
+                                ),
+                            );
+                        }
+                        if date.is_some_and(|d| d.format("%Y-%m-%d").to_string() < r.voucher_date) {
+                            e.add("voucherDate", "A refund can't be dated before the advance.");
+                        }
+                        refund_of = Some((r, st));
+                    }
+                    _ => e.add(
+                        "refundOfId",
+                        "Choose an advance of this party that has something left.",
+                    ),
+                }
+            }
+        } else if clean(&input.refund_of_id).is_some() {
+            e.add("refundOfId", "Only a refund gives back an advance.");
         }
 
         // Allocations: only to this party's open documents, never more than
@@ -1358,6 +1470,22 @@ impl<S: Store> AppCore<S> {
             }
         }
 
+        // Tax on the part left as an advance (services, section 13).
+        let mut taxed = None;
+        if let Some(t) = &input.advance_tax {
+            if voucher_type != "receipt" || party.is_none() || purpose != "settlement" {
+                e.add(
+                    "advanceTax",
+                    "Tax on advances applies to money received from customers.",
+                );
+            } else {
+                let regs = uow.list_registrations(&org.id).await?;
+                let settled: i64 = allocations.iter().map(|(_, a)| a).sum();
+                let gross = amount.unwrap_or(0) - settled;
+                taxed = advance_tax(&mut e, t, &regs, date, gross);
+            }
+        }
+
         // Statement line to reconcile with, if any.
         let mut statement_line = None;
         if let Some(line_id) = clean(&input.statement_line_id) {
@@ -1400,6 +1528,20 @@ impl<S: Store> AppCore<S> {
         let now = self.now();
         let id = new_id().to_string();
         let voucher_date = date.format("%Y-%m-%d").to_string();
+        let taxed_reg = taxed.as_ref().map(|(r, _)| r.id.clone()).or_else(|| {
+            refund_of
+                .as_ref()
+                .and_then(|(_, st)| st.tax.as_ref().map(|t| t.gst_registration_id.clone()))
+        });
+        if let Some(reg_id) = &taxed_reg
+            && let Some(lock) = self
+                .gst_lock(&mut uow, &org.id, Some(reg_id), &voucher_date, "sales")
+                .await?
+        {
+            return Err(AppError::Conflict(format!(
+                "{lock} is filed, so tax on advances can't change in that month. Use a date in an open month."
+            )));
+        }
 
         let money_line = |debit: bool| PostLine {
             role: "",
@@ -1410,11 +1552,7 @@ impl<S: Store> AppCore<S> {
         };
         let other_line = |debit: bool| match (&party, &counter) {
             (Some(p), _) => {
-                let role = if voucher_type == "receipt" {
-                    "receivables"
-                } else {
-                    "payables"
-                };
+                let role = party_role(voucher_type, purpose);
                 if debit {
                     PostLine::debit(role, amount, Some(&p.id))
                 } else {
@@ -1430,11 +1568,14 @@ impl<S: Store> AppCore<S> {
             },
             _ => unreachable!("validated above"),
         };
-        let lines = if voucher_type == "receipt" {
+        let mut lines = if voucher_type == "receipt" {
             vec![money_line(true), other_line(false)]
         } else {
             vec![other_line(true), money_line(false)]
         };
+        if let Some((_, parts)) = &taxed {
+            lines.extend(tax_lines(parts));
+        }
         let who = party
             .as_ref()
             .map(|p| p.name.clone())
@@ -1449,10 +1590,11 @@ impl<S: Store> AppCore<S> {
                 source_type: voucher_type,
                 source_id: Some(&id),
                 narration: Some(narration.clone().unwrap_or_else(|| {
-                    if voucher_type == "receipt" {
-                        format!("{number} — received from {who}")
-                    } else {
-                        format!("{number} — paid to {who}")
+                    match (voucher_type, purpose) {
+                        ("receipt", "refund") => format!("{number} — refund from {who}"),
+                        ("payment", "refund") => format!("{number} — refund to {who}"),
+                        ("receipt", _) => format!("{number} — received from {who}"),
+                        _ => format!("{number} — paid to {who}"),
                     }
                 })),
                 reverses_entry_id: None,
@@ -1486,8 +1628,65 @@ impl<S: Store> AppCore<S> {
             created_at: now.clone(),
             updated_at: now.clone(),
             cancelled_at: None,
+            purpose: purpose.into(),
+            refund_of_id: refund_of.as_ref().map(|(r, _)| r.id.clone()),
         };
         uow.insert_voucher(&v).await?;
+        if let (Some((reg, parts)), Some(t)) = (&taxed, &input.advance_tax) {
+            uow.insert_advance_tax(&tax_record(&id, &org.id, &reg.id, t, parts))
+                .await?;
+        }
+        // A refund out of a taxed advance takes back the tax on what is refunded.
+        if let Some((r, st)) = &refund_of
+            && let Some(t) = &st.tax
+        {
+            let reg = uow
+                .list_registrations(&org.id)
+                .await?
+                .into_iter()
+                .find(|g| g.id == t.gst_registration_id)
+                .ok_or(AppError::NotFound("GST registration"))?;
+            let part = take(
+                remaining(t, &st.adjustments),
+                amount,
+                u32::try_from(t.rate_bp).unwrap_or(0),
+                supply_kind(&reg, t.place_of_supply),
+            );
+            let lines: Vec<PostLine> = tax_lines(&part).iter().map(PostLine::mirrored).collect();
+            if !lines.is_empty() {
+                let entry = post(
+                    &mut uow,
+                    ctx,
+                    Posting {
+                        org_id: &org.id,
+                        entry_date: &v.voucher_date,
+                        source_type: "advance_adjustment",
+                        source_id: Some(&r.id),
+                        narration: Some(format!(
+                            "Tax on advance {} refunded by {}",
+                            r.number, v.number
+                        )),
+                        reverses_entry_id: None,
+                        idempotency_key: Some(format!("advance:refund:{id}")),
+                        lines,
+                    },
+                    &now,
+                )
+                .await?;
+                uow.insert_advance_adjustment(&adjustment_record(
+                    &org.id,
+                    &r.id,
+                    "refund",
+                    None,
+                    Some(id.clone()),
+                    &v.voucher_date,
+                    &part,
+                    &entry,
+                    &now,
+                ))
+                .await?;
+            }
+        }
         for (doc, amt) in &allocations {
             uow.insert_allocation(&VoucherAllocationRecord {
                 id: new_id().to_string(),
@@ -1495,6 +1694,8 @@ impl<S: Store> AppCore<S> {
                 document_kind: doc.document_kind.clone(),
                 document_id: doc.id.clone(),
                 amount_paise: *amt,
+                allocated_on: None,
+                allocated_by: None,
             })
             .await?;
             if !uow
@@ -1562,7 +1763,74 @@ impl<S: Store> AppCore<S> {
                 "This is reconciled with a bank statement line. Unmatch it first.".into(),
             ));
         }
+        // Refunds given out of this advance go first.
+        let state = self.advance_state(&mut uow, &org.id, &before).await?;
+        if let Some(r) = state.refunds.first() {
+            return Err(AppError::Conflict(format!(
+                "{} refunds part of this advance. Cancel the refund first.",
+                r.number
+            )));
+        }
+        // Tax adjustments made with this voucher (as the advance, or as the
+        // refund of one) are reversed with it, unless their month is filed.
+        let adjustments: Vec<_> = uow
+            .list_advance_adjustments(&org.id)
+            .await?
+            .into_iter()
+            .filter(|a| {
+                a.status == "posted"
+                    && (a.voucher_id == before.id
+                        || a.refund_voucher_id.as_deref() == Some(before.id.as_str()))
+            })
+            .collect();
+        let taxes = uow.list_advance_taxes(&org.id).await?;
+        let mut tax_dates: Vec<(String, String)> = Vec::new();
+        if let Some(t) = taxes.iter().find(|t| t.voucher_id == before.id) {
+            tax_dates.push((t.gst_registration_id.clone(), before.voucher_date.clone()));
+        }
+        for a in &adjustments {
+            if let Some(t) = taxes.iter().find(|t| t.voucher_id == a.voucher_id) {
+                tax_dates.push((t.gst_registration_id.clone(), a.adjust_date.clone()));
+            }
+        }
+        for (reg, date) in &tax_dates {
+            if let Some(lock) = self
+                .gst_lock(&mut uow, &org.id, Some(reg), date, "sales")
+                .await?
+            {
+                return Err(AppError::Conflict(format!(
+                    "{lock} is filed and reports tax on this advance, so it can't be cancelled."
+                )));
+            }
+        }
         let now = self.now();
+        for a in &adjustments {
+            // The adjustment posted the tax lines mirrored; reversing it
+            // posts them as they are.
+            let reversal = tax_lines(&Parts::of_adjustment(a));
+            let entry = post(
+                &mut uow,
+                ctx,
+                Posting {
+                    org_id: &org.id,
+                    entry_date: &a.adjust_date,
+                    source_type: "advance_adjustment",
+                    source_id: Some(&a.voucher_id),
+                    narration: Some(format!("Cancellation of {} — {reason}", before.number)),
+                    reverses_entry_id: Some(&a.journal_entry_id),
+                    idempotency_key: Some(format!("advance:cancel:{}", a.id)),
+                    lines: reversal,
+                },
+                &now,
+            )
+            .await?;
+            if !uow
+                .cancel_advance_adjustment(&org.id, &a.id, &entry)
+                .await?
+            {
+                return Err(AppError::stale());
+            }
+        }
         // Reverse exactly what was posted.
         let original = journal_lines_of(&mut uow, &org.id, &before).await?;
         let entry_id = post(
@@ -2097,10 +2365,11 @@ async fn journal_lines_of<U: UnitOfWork>(
     };
     let other = match (&v.party_id, &v.counter_account_id) {
         (Some(p), _) => {
+            let role = party_role(&v.voucher_type, &v.purpose);
             if receipt {
-                PostLine::credit("receivables", amount, Some(p))
+                PostLine::credit(role, amount, Some(p))
             } else {
-                PostLine::debit("payables", amount, Some(p))
+                PostLine::debit(role, amount, Some(p))
             }
         }
         (_, Some(a)) => PostLine {
@@ -2112,11 +2381,20 @@ async fn journal_lines_of<U: UnitOfWork>(
         },
         _ => return Err(AppError::Invalid("voucher has no other side".into())),
     };
-    Ok(if receipt {
+    let mut lines = if receipt {
         vec![money_line, other]
     } else {
         vec![other, money_line]
-    })
+    };
+    if let Some(t) = uow
+        .list_advance_taxes(org_id)
+        .await?
+        .into_iter()
+        .find(|t| t.voucher_id == v.id)
+    {
+        lines.extend(tax_lines(&Parts::of_tax(&t)));
+    }
+    Ok(lines)
 }
 
 /// Bring an account's posted opening balance in line with `amount` (debit
